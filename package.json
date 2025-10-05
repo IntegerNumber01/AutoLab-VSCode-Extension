@@ -25,8 +25,17 @@
       "autolab": [
         {
           "id": "autolab.explorer",
-          "name": "Assignments",
-          "icon": "resources/logo.svg"
+          "name": "ACTIONS",
+          "icon": "resources/logo.svg",
+          "type": "webview"
+        },
+        {
+          "id": "autolab.assignments",
+          "name": "ASSIGNMENTS"
+        },
+        {
+          "id": "autolab.submissions",
+          "name": "SUBMISSIONS"
         }
       ]
     },
@@ -45,18 +54,6 @@
       }
     ],
     "menus": {
-      "view/title": [
-        {
-          "view": "autolab.explorer",
-          "command": "autolab.zipFolder",
-          "group": "navigation@1"
-        },
-        {
-          "view": "autolab.explorer",
-          "command": "autolab.unzipArchive",
-          "group": "navigation@2"
-        }
-      ],
       "commandPalette": [
         {
           "command": "autolab.zipFolder",
@@ -76,11 +73,6 @@
           "type": "string",
           "default": "",
           "markdownDescription": "Folder where Autolab handouts are imported (e.g., your Google Drive path)."
-        },
-        "autolab.defaultZipDir": {
-          "type": "string",
-          "default": "",
-          "markdownDescription": "Optional directory where .zip files are written. Leave blank to place the .zip next to the source folder."
         }
       }
     }
@@ -114,6 +106,7 @@
     "typescript": "^5.9.2"
   },
   "dependencies": {
+    "@vscode/webview-ui-toolkit": "^1.4.0",
     "adm-zip": "^0.5.16",
     "fast-glob": "^3.3.3"
   }

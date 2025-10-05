@@ -1,11 +1,23 @@
 import * as vscode from "vscode";
 import * as path from "path";
+import * as fs from "fs";
 
 export function activate(context: vscode.ExtensionContext) {
   // Webview view in the sidebar
   const provider = new AutolabViewProvider(context);
   context.subscriptions.push(
     vscode.window.registerWebviewViewProvider("autolab.explorer", provider, { webviewOptions: { retainContextWhenHidden: true } })
+  );
+
+  // Tree data providers for the list views
+  const assignmentsProvider = new EmptyTreeDataProvider("You have not yet opened a folder.");
+  context.subscriptions.push(
+    vscode.window.registerTreeDataProvider("autolab.assignments", assignmentsProvider)
+  );
+
+  const submissionsProvider = new EmptyTreeDataProvider("No submissions yet.");
+  context.subscriptions.push(
+    vscode.window.registerTreeDataProvider("autolab.submissions", submissionsProvider)
   );
 
   // Open Settings filtered to autolab
@@ -34,6 +46,20 @@ export function activate(context: vscode.ExtensionContext) {
   );
 }
 
+class EmptyTreeDataProvider implements vscode.TreeDataProvider<vscode.TreeItem> {
+  constructor(private message: string) {}
+
+  getTreeItem(element: vscode.TreeItem): vscode.TreeItem {
+    return element;
+  }
+
+  getChildren(): vscode.TreeItem[] {
+    const item = new vscode.TreeItem(this.message);
+    item.contextValue = "empty";
+    return [item];
+  }
+}
+
 export function deactivate() {}
 
 class AutolabViewProvider implements vscode.WebviewViewProvider {
@@ -46,90 +72,26 @@ class AutolabViewProvider implements vscode.WebviewViewProvider {
     const nonce = getNonce();
     webview.html = this.getHtml(webview, nonce);
 
-    // Listen for button clicks from the webview
     webview.onDidReceiveMessage(async (msg) => {
       if (msg?.type === "configure") {
         await vscode.commands.executeCommand("autolab.configure");
-      } else if (msg?.type === "selectWorkspace") {
-        await vscode.commands.executeCommand("autolab.selectWorkspace");
       }
     });
   }
 
   private getHtml(webview: vscode.Webview, nonce: string): string {
-    // Use theme colors for a native feel
-    const style = `
-      :root {
-        --btn-bg: var(--vscode-button-background);
-        --btn-bg-hover: var(--vscode-button-hoverBackground);
-        --btn-fg: var(--vscode-button-foreground);
-        --panel-bg: var(--vscode-sideBar-background);
-        --panel-fg: var(--vscode-foreground);
-        --border: var(--vscode-editorGroup-border);
-      }
-      body {
-        padding: 14px 12px;
-        background: var(--panel-bg);
-        color: var(--panel-fg);
-        font: 13px var(--vscode-font-family);
-      }
-      .card {
-        border: 1px solid var(--border);
-        border-radius: 8px;
-        padding: 16px;
-      }
-      .actions { display: grid; gap: 8px; }
-      button.primary {
-        all: unset;
-        display: inline-block;
-        text-align: center;
-        padding: 10px 14px;
-        border-radius: 6px;
-        background: var(--btn-bg);
-        color: var(--btn-fg);
-        cursor: pointer;
-        font-weight: 600;
-      }
-      button.primary:hover { background: var(--btn-bg-hover); }
-      .sub {
-        font-size: 12px;
-        opacity: 0.8;
-        margin-top: 8px;
-      }
-    `;
+    const toolkitUri = webview.asWebviewUri(
+      vscode.Uri.joinPath(this.ctx.extensionUri, "node_modules", "@vscode/webview-ui-toolkit", "dist", "toolkit.js")
+    );
 
-    const script = `
-      const vscode = acquireVsCodeApi();
-      document.getElementById('configure').addEventListener('click', () => {
-        vscode.postMessage({ type: 'configure' });
-      });
-      document.getElementById('select').addEventListener('click', () => {
-        vscode.postMessage({ type: 'selectWorkspace' });
-      });
-    `;
+    const htmlPath = path.join(this.ctx.extensionPath, "webview", "sidebar.html");
+    let html = fs.readFileSync(htmlPath, "utf8");
 
-    return /* html */ `
-      <!DOCTYPE html>
-      <html lang="en">
-      <head>
-        <meta charset="UTF-8">
-        <meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src ${webview.cspSource} https:; style-src ${webview.cspSource} 'unsafe-inline'; script-src 'nonce-${nonce}';">
-        <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <style>${style}</style>
-        <title>Autolab</title>
-      </head>
-      <body>
-        <div class="card">
-          <div class="actions">
-            <button id="configure" class="primary">Configure</button>
-            <button id="select" class="primary">Select Workspace Folder…</button>
-            <div class="sub">Configure opens Settings filtered to <code>autolab</code>. You can also pick a workspace folder here.</div>
-          </div>
-        </div>
-        <script nonce="${nonce}">${script}</script>
-      </body>
-      </html>
-    `;
+    html = html.replace(/{{nonce}}/g, nonce);
+    html = html.replace(/{{toolkitUri}}/g, toolkitUri.toString());
+    html = html.replace(/{{cspSource}}/g, webview.cspSource);
+
+    return html;
   }
 }
 
