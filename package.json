@@ -12,12 +12,78 @@
   "activationEvents": [],
   "main": "./dist/extension.js",
   "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "autolab",
+          "title": "Autolab",
+          "icon": "resources/logo.svg"
+        }
+      ]
+    },
+    "views": {
+      "autolab": [
+        {
+          "id": "autolab.explorer",
+          "name": "Assignments",
+          "icon": "resources/logo.svg"
+        }
+      ]
+    },
     "commands": [
       {
         "command": "autolab.helloWorld",
         "title": "Hello World"
+      },
+      {
+        "command": "autolab.zipFolder",
+        "title": "Autolab: Zip a Folder"
+      },
+      {
+        "command": "autolab.unzipArchive",
+        "title": "Autolab: Unzip an Archive"
       }
-    ]
+    ],
+    "menus": {
+      "view/title": [
+        {
+          "view": "autolab.explorer",
+          "command": "autolab.zipFolder",
+          "group": "navigation@1"
+        },
+        {
+          "view": "autolab.explorer",
+          "command": "autolab.unzipArchive",
+          "group": "navigation@2"
+        }
+      ],
+      "commandPalette": [
+        {
+          "command": "autolab.zipFolder",
+          "when": "true"
+        },
+        {
+          "command": "autolab.unzipArchive",
+          "when": "true"
+        }
+      ]
+    },
+    "configuration": {
+      "type": "object",
+      "title": "Autolab Helper",
+      "properties": {
+        "autolab.workspaceFolder": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "Folder where Autolab handouts are imported (e.g., your Google Drive path)."
+        },
+        "autolab.defaultZipDir": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "Optional directory where .zip files are written. Leave blank to place the .zip next to the source folder."
+        }
+      }
+    }
   },
   "scripts": {
     "vscode:prepublish": "npm run package",
@@ -34,16 +100,21 @@
     "test": "vscode-test"
   },
   "devDependencies": {
-    "@types/vscode": "^1.104.0",
+    "@types/adm-zip": "^0.5.7",
     "@types/mocha": "^10.0.10",
     "@types/node": "22.x",
+    "@types/vscode": "^1.104.0",
     "@typescript-eslint/eslint-plugin": "^8.42.0",
     "@typescript-eslint/parser": "^8.42.0",
-    "eslint": "^9.34.0",
-    "esbuild": "^0.25.9",
-    "npm-run-all": "^4.1.5",
-    "typescript": "^5.9.2",
     "@vscode/test-cli": "^0.0.11",
-    "@vscode/test-electron": "^2.5.2"
+    "@vscode/test-electron": "^2.5.2",
+    "esbuild": "^0.25.9",
+    "eslint": "^9.34.0",
+    "npm-run-all": "^4.1.5",
+    "typescript": "^5.9.2"
+  },
+  "dependencies": {
+    "adm-zip": "^0.5.16",
+    "fast-glob": "^3.3.3"
   }
 }
