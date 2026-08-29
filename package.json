@@ -1,15 +1,27 @@
 {
   "name": "autolab",
-  "displayName": "AutoLab",
-  "description": "An easy way to manage assignments/coursework in AutoLab directly in VSCode.",
-  "version": "0.0.1",
+  "displayName": "Autolab",
+  "description": "Download, work on, submit, and review Autolab assignments without leaving VS Code.",
+  "version": "0.2.0",
   "engines": {
     "vscode": "^1.104.0"
   },
   "categories": [
     "Other"
   ],
-  "activationEvents": [],
+  "keywords": [
+    "autolab",
+    "education",
+    "assignments",
+    "autograding",
+    "student"
+  ],
+  "license": "MIT",
+  "activationEvents": [
+    "onView:autolab.account",
+    "onView:autolab.assignments",
+    "onView:autolab.submissions"
+  ],
   "main": "./dist/extension.js",
   "contributes": {
     "viewsContainers": {
@@ -24,55 +36,218 @@
     "views": {
       "autolab": [
         {
-          "id": "autolab.explorer",
-          "name": "ACTIONS",
-          "icon": "resources/logo.svg",
-          "type": "webview"
+          "id": "autolab.account",
+          "name": "ACCOUNT"
         },
         {
           "id": "autolab.assignments",
-          "name": "ASSIGNMENTS"
+          "name": "LABS"
         },
         {
           "id": "autolab.submissions",
-          "name": "SUBMISSIONS"
+          "name": "CURRENT LAB"
         }
       ]
     },
     "commands": [
       {
-        "command": "autolab.helloWorld",
-        "title": "Hello World"
+        "command": "autolab.setup",
+        "title": "Set Up Autolab",
+        "category": "Autolab",
+        "icon": "$(rocket)"
       },
       {
-        "command": "autolab.zipFolder",
-        "title": "Autolab: Zip a Folder"
+        "command": "autolab.signIn",
+        "title": "Sign In",
+        "category": "Autolab",
+        "icon": "$(sign-in)"
       },
       {
-        "command": "autolab.unzipArchive",
-        "title": "Autolab: Unzip an Archive"
+        "command": "autolab.signOut",
+        "title": "Sign Out",
+        "category": "Autolab"
+      },
+      {
+        "command": "autolab.selectWorkspace",
+        "title": "Choose Labs Workspace Folder",
+        "category": "Autolab"
+      },
+      {
+        "command": "autolab.openSettings",
+        "title": "Open Settings",
+        "category": "Autolab",
+        "icon": "$(gear)"
+      },
+      {
+        "command": "autolab.refresh",
+        "title": "Refresh",
+        "category": "Autolab",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "autolab.download",
+        "title": "Download Lab",
+        "category": "Autolab",
+        "icon": "$(cloud-download)"
+      },
+      {
+        "command": "autolab.openLab",
+        "title": "Open Lab in New Window",
+        "category": "Autolab",
+        "icon": "$(link-external)"
+      },
+      {
+        "command": "autolab.submit",
+        "title": "Submit Current Lab",
+        "category": "Autolab",
+        "icon": "$(cloud-upload)"
+      },
+      {
+        "command": "autolab.submitAssessment",
+        "title": "Submit Lab",
+        "category": "Autolab",
+        "icon": "$(cloud-upload)"
+      },
+      {
+        "command": "autolab.showAssessment",
+        "title": "Show Lab Details",
+        "category": "Autolab"
+      },
+      {
+        "command": "autolab.showResults",
+        "title": "Show Scores & Feedback",
+        "category": "Autolab",
+        "icon": "$(output)"
+      },
+      {
+        "command": "autolab.toggleGrouping",
+        "title": "Group Labs by Course or Status",
+        "category": "Autolab",
+        "icon": "$(list-tree)"
       }
     ],
     "menus": {
-      "commandPalette": [
+      "view/title": [
         {
-          "command": "autolab.zipFolder",
-          "when": "true"
+          "command": "autolab.setup",
+          "when": "view == autolab.account",
+          "group": "navigation@1"
         },
         {
-          "command": "autolab.unzipArchive",
-          "when": "true"
+          "command": "autolab.openSettings",
+          "when": "view == autolab.account",
+          "group": "navigation@2"
+        },
+        {
+          "command": "autolab.refresh",
+          "when": "view == autolab.assignments || view == autolab.submissions",
+          "group": "navigation@1"
+        },
+        {
+          "command": "autolab.submit",
+          "when": "view == autolab.submissions && autolab.isLab",
+          "group": "navigation@2"
+        },
+        {
+          "command": "autolab.toggleGrouping",
+          "when": "view == autolab.assignments",
+          "group": "navigation@2"
+        }
+      ],
+      "view/item/context": [
+        {
+          "command": "autolab.download",
+          "when": "view == autolab.assignments && viewItem == autolabAssessment",
+          "group": "inline@1"
+        },
+        {
+          "command": "autolab.openLab",
+          "when": "view == autolab.assignments && viewItem == autolabAssessmentDownloaded",
+          "group": "inline@1"
+        },
+        {
+          "command": "autolab.submitAssessment",
+          "when": "view == autolab.assignments && viewItem == autolabAssessmentDownloaded",
+          "group": "inline@2"
+        },
+        {
+          "command": "autolab.showResults",
+          "when": "view == autolab.submissions && viewItem == autolabSubmission",
+          "group": "inline@1"
         }
       ]
     },
     "configuration": {
       "type": "object",
-      "title": "Autolab Helper",
+      "title": "Autolab",
       "properties": {
+        "autolab.host": {
+          "type": "string",
+          "default": "",
+          "scope": "window",
+          "description": "Base URL of your Autolab instance, for example https://autolab.example.edu."
+        },
+        "autolab.clientId": {
+          "type": "string",
+          "default": "",
+          "scope": "window",
+          "markdownDescription": "Public OAuth client ID provided by your instructor or administrator. Never enter a client secret."
+        },
         "autolab.workspaceFolder": {
           "type": "string",
           "default": "",
-          "markdownDescription": "Folder where Autolab handouts are imported (e.g., your Google Drive path)."
+          "scope": "machine",
+          "markdownDescription": "Folder where Autolab creates one course/lab directory for downloaded assignments."
+        },
+        "autolab.groupBy": {
+          "type": "string",
+          "enum": [
+            "course",
+            "status"
+          ],
+          "enumDescriptions": [
+            "Group labs under the course they belong to.",
+            "Group labs by what is left to do: To do, Awaiting score, Graded, Not open yet, Closed."
+          ],
+          "default": "course",
+          "description": "How the Labs view groups assessments."
+        },
+        "autolab.submissionFormat": {
+          "type": "string",
+          "enum": [
+            "ask",
+            "zip",
+            "tar.gz",
+            "file"
+          ],
+          "enumDescriptions": [
+            "Ask how to package the lab on every submission.",
+            "Package the lab folder as submission.zip.",
+            "Package the lab folder as submission.tar.gz.",
+            "Choose an existing file for every submission."
+          ],
+          "default": "ask",
+          "description": "How to prepare files when submitting a lab."
+        },
+        "autolab.exclude": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [
+            ".autolab/**",
+            ".git/**",
+            "node_modules/**",
+            ".venv/**",
+            "__pycache__/**"
+          ],
+          "markdownDescription": "Glob patterns excluded when packaging a lab folder. Review these if your assignment needs a normally excluded folder."
+        },
+        "autolab.allowInsecureHttp": {
+          "type": "boolean",
+          "default": false,
+          "scope": "machine",
+          "markdownDescription": "Allow plain HTTP for a trusted local development server. **Never enable this for a real student account.**"
         }
       }
     }
@@ -86,13 +261,13 @@
     "package": "npm run check-types && npm run lint && node esbuild.js --production",
     "compile-tests": "tsc -p . --outDir out",
     "watch-tests": "tsc -p . -w --outDir out",
-    "pretest": "npm run compile-tests && npm run compile && npm run lint",
+    "pretest": "npm run compile-tests && npm run compile",
     "check-types": "tsc --noEmit",
     "lint": "eslint src",
-    "test": "vscode-test"
+    "test": "mocha --ui tdd \"out/test/**/*.test.js\"",
+    "test:extension": "vscode-test"
   },
   "devDependencies": {
-    "@types/adm-zip": "^0.5.7",
     "@types/mocha": "^10.0.10",
     "@types/node": "22.x",
     "@types/vscode": "^1.104.0",
@@ -102,12 +277,17 @@
     "@vscode/test-electron": "^2.5.2",
     "esbuild": "^0.25.9",
     "eslint": "^9.34.0",
+    "mocha": "^11.7.2",
     "npm-run-all": "^4.1.5",
     "typescript": "^5.9.2"
   },
   "dependencies": {
-    "@vscode/webview-ui-toolkit": "^1.4.0",
-    "adm-zip": "^0.5.16",
-    "fast-glob": "^3.3.3"
+    "fast-glob": "^3.3.3",
+    "tar": "^7.4.3"
+  },
+  "overrides": {
+    "diff": "^8.0.3",
+    "picomatch": "^2.3.2",
+    "serialize-javascript": "^7.0.5"
   }
 }
