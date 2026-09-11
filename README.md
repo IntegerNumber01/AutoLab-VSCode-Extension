@@ -31,6 +31,7 @@ The extension never asks for an Autolab password or OAuth client secret. Sign-in
 - Optional grouping of the Labs view by status (To do, Awaiting score, Graded, Not open yet, Closed) instead of by course.
 - A short, cancellable poll after each submission to an autograded lab, so the score appears without manual refreshing.
 - Automatic access-token refresh and a clear reauthorization path after revocation.
+- A reduced mode for OAuth applications registered without the `user_courses` scope, where labs are added by URL and everything except discovery still works.
 - HTTPS required by default. Plain HTTP is available only as an explicit local-development option.
 
 ## Autolab administrator setup
@@ -54,6 +55,23 @@ Distribute only `app.uid` (the client ID). Never distribute `app.secret`.
 
 The redirect URI must match the Autolab host exactly. For an installation under `/autolab`, for example, use `https://example.edu/autolab/device_flow_auth_cb` and give students `https://example.edu/autolab` as the host.
 
+Autolab builds the redirect URI itself during the device flow — `device_flow_activation#resolve` redirects to `/oauth/authorize` with `redirect_uri: device_flow_auth_cb_url` — so a redirect URI of any other shape, including a `vscode://` one, produces *"The requested redirect uri is malformed or doesn't match client redirect URI"* when the student enters their code. The extension cannot influence that value.
+
+### Working without the `user_courses` scope
+
+If the application is registered without `user_courses`, the extension still works in a reduced mode rather than failing. Autolab guards discovery behind that scope, but everything else is reachable:
+
+| Feature | Endpoint | Scope |
+| --- | --- | --- |
+| Lab details, due dates, problem names, maximum scores | `assessments/:name` | none beyond a valid token |
+| Submission history and per-problem scores | `submissions` | `user_scores` |
+| Autograder feedback | `submissions/:version/feedback` | `user_scores` |
+| Submitting | `submit` | `user_submit` |
+| Listing courses and labs | `courses`, `assessments` | `user_courses` |
+| Handout and writeup downloads | `handout`, `writeup` | `user_courses` |
+
+In reduced mode students add each lab with **Autolab: Add Lab by URL** (or the `+` button in the Labs view), pasting the Autolab page URL for the lab. Problem names and maximum scores come from the assessment itself instead of `/problems`, and handouts and writeups open in the browser, where the student's normal Autolab session can still fetch them. Adding the scope restores automatic discovery with no other change.
+
 See the official [Autolab API overview](https://docs.autolabproject.com/api-overview/), [API endpoint reference](https://docs.autolabproject.com/api-interface/), and [Autolab source](https://github.com/autolab/Autolab).
 
 ## Settings
@@ -64,6 +82,7 @@ See the official [Autolab API overview](https://docs.autolabproject.com/api-over
 | `autolab.clientId` | Public, non-confidential OAuth application ID. |
 | `autolab.workspaceFolder` | Parent directory for downloaded course/lab folders. |
 | `autolab.groupBy` | Group the Labs view by `course` (default) or by `status`. |
+| `autolab.courses` | Labs added by URL, used when the OAuth application cannot list courses. |
 | `autolab.submissionFormat` | Ask each time, ZIP, tar.gz, or select one exact file. |
 | `autolab.exclude` | Glob patterns left out of packaged folders. |
 | `autolab.allowInsecureHttp` | Allows HTTP only for trusted local development. |

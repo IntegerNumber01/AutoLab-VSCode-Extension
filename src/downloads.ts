@@ -3,16 +3,18 @@ import * as path from "path";
 import * as tar from "tar";
 import * as vscode from "vscode";
 import type { AutolabApi } from "./api";
+import { isForbidden } from "./api";
 import { readSettings } from "./config";
 import { localLabFor, METADATA_DIRECTORY, readLabMetadata, writeLabMetadata } from "./metadata";
 import type {
   AttachmentResponse,
   AutolabAssessment,
+  AutolabAssessmentDetails,
   AutolabCourse,
   LabArtifact,
   LabMetadata,
 } from "./types";
-import { isPathInside, isSafeArchivePath, joinHostPath, safePathSegment } from "./utils";
+import { assessmentPath, isPathInside, isSafeArchivePath, joinHostPath, safePathSegment } from "./utils";
 import { ZipArchive } from "./zip";
 
 const MAX_EXTRACTED_BYTES = 1_073_741_824;
@@ -26,7 +28,11 @@ export interface DownloadResult {
 export class LabDownloader {
   constructor(private readonly api: AutolabApi) {}
 
-  async download(course: AutolabCourse, assessment: AutolabAssessment): Promise<DownloadResult | undefined> {
+  async download(
+    course: AutolabCourse,
+    assessment: AutolabAssessment,
+    details?: AutolabAssessmentDetails,
+  ): Promise<DownloadResult | undefined> {
     const settings = readSettings();
     if (!settings.workspaceFolder) {
       throw new Error("Choose an Autolab workspace folder before downloading a lab.");
@@ -77,8 +83,8 @@ export class LabDownloader {
       async (progress) => {
         progress.report({ message: "Fetching handout and writeup…" });
         const [handout, writeup] = await Promise.all([
-          this.api.downloadHandout(course.name, assessment.name),
-          this.api.downloadWriteup(course.name, assessment.name),
+          this.fetchAttachment("handout", course.name, assessment.name, settings.host, details),
+          this.fetchAttachment("writeup", course.name, assessment.name, settings.host, details),
         ]);
 
         const externalUrls: string[] = [];
@@ -110,6 +116,35 @@ export class LabDownloader {
     }
     await openLabWindow(lab.directory);
     return true;
+  }
+
+  /**
+   * Handout and writeup downloads sit behind the `user_courses` scope. When the OAuth
+   * application does not have it, fall back to the Autolab web page for the file: the
+   * student's browser session can still fetch it, so the lab is only one click away
+   * instead of unavailable.
+   */
+  private async fetchAttachment(
+    kind: "handout" | "writeup",
+    course: string,
+    assessment: string,
+    host: string,
+    details?: AutolabAssessmentDetails,
+  ): Promise<AttachmentResponse> {
+    try {
+      return kind === "handout"
+        ? await this.api.downloadHandout(course, assessment)
+        : await this.api.downloadWriteup(course, assessment);
+    } catch (error) {
+      if (!isForbidden(error)) {
+        throw error;
+      }
+      const format = kind === "handout" ? details?.handout_format : details?.writeup_format;
+      if (format === "none") {
+        return { kind: "none" };
+      }
+      return { kind: "url", url: joinHostPath(host, `${assessmentPath(course, assessment)}/${kind}`) };
+    }
   }
 
   private async saveAttachment(

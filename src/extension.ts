@@ -3,6 +3,7 @@ import * as vscode from "vscode";
 import { SessionManager } from "./auth";
 import { readSettings, updateGlobalSetting } from "./config";
 import { LabDownloader, openLabWindow } from "./downloads";
+import { formatLabReference, parseLabReference } from "./manual";
 import { findCurrentLab } from "./metadata";
 import { PanelManager } from "./panels";
 import { SubmissionManager } from "./submission";
@@ -80,10 +81,12 @@ export function activate(context: vscode.ExtensionContext): void {
       );
     }),
     register("autolab.refresh", async () => refreshAll()),
+    register("autolab.addLab", async () => addLabByUrl(refreshAll)),
+    register("autolab.removeLab", async () => removeLabsByUrl(refreshAll)),
     register("autolab.download", async (first?: unknown, second?: unknown) => {
       const selected = await resolveAssessment(dashboard, first, second);
       const downloader = new LabDownloader(session.api());
-      const result = await downloader.download(selected.course, selected.assessment);
+      const result = await downloader.download(selected.course, selected.assessment, selected.details);
       if (!result) {
         return;
       }
@@ -211,6 +214,76 @@ async function guidedSetup(session: SessionManager, refresh: () => void): Promis
     await session.signIn();
     refresh();
   }
+}
+
+/**
+ * Adds a lab the extension cannot discover on its own, for OAuth applications registered
+ * without the `user_courses` scope.
+ */
+async function addLabByUrl(refresh: () => void): Promise<void> {
+  const settings = readSettings();
+  const input = await vscode.window.showInputBox({
+    title: "Add Autolab Lab",
+    prompt: "Paste the Autolab page URL for the lab",
+    placeHolder: `${settings.host || "https://autolab.example.edu"}/courses/COURSE/assessments/LAB`,
+    ignoreFocusOut: true,
+    validateInput: (value) => {
+      if (!value.trim()) {
+        return undefined;
+      }
+      try {
+        parseLabReference(value, settings.host);
+        return undefined;
+      } catch (error) {
+        return errorMessage(error);
+      }
+    },
+  });
+  if (!input?.trim()) {
+    return;
+  }
+
+  const lab = parseLabReference(input, settings.host);
+  const reference = formatLabReference(lab);
+  if (settings.courses.some((configured) => sameLab(configured, reference))) {
+    await vscode.window.showInformationMessage(`${reference} is already in your Autolab labs.`);
+    return;
+  }
+
+  await updateGlobalSetting("courses", [...settings.courses, reference]);
+  refresh();
+  await vscode.window.showInformationMessage(
+    lab.assessment
+      ? `Added ${reference}.`
+      : `Added the course ${reference}. Listing its labs needs the user_courses scope — add lab URLs individually if they do not appear.`,
+  );
+}
+
+/** Compares a configured entry with a reference, ignoring which form each was written in. */
+function sameLab(configured: string, reference: string): boolean {
+  try {
+    return formatLabReference(parseLabReference(configured)) === reference;
+  } catch {
+    return false;
+  }
+}
+
+async function removeLabsByUrl(refresh: () => void): Promise<void> {
+  const settings = readSettings();
+  if (!settings.courses.length) {
+    await vscode.window.showInformationMessage("No labs have been added by URL.");
+    return;
+  }
+  const picked = await vscode.window.showQuickPick(settings.courses, {
+    title: "Remove Autolab Labs Added by URL",
+    canPickMany: true,
+    placeHolder: "Select the entries to remove",
+  });
+  if (!picked?.length) {
+    return;
+  }
+  await updateGlobalSetting("courses", settings.courses.filter((value) => !picked.includes(value)));
+  refresh();
 }
 
 async function selectWorkspaceFolder(title = "Choose your Autolab workspace folder"): Promise<string | undefined> {

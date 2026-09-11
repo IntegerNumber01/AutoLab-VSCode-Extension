@@ -13,6 +13,8 @@ export interface ExtensionSettings extends ConnectionSettings {
   submissionFormat: SubmissionFormat;
   exclude: string[];
   groupBy: LabGrouping;
+  /** Course or lab references used when Autolab will not list courses for this client. */
+  courses: string[];
 }
 
 export function readSettings(): ExtensionSettings {
@@ -35,6 +37,7 @@ export function readSettings(): ExtensionSettings {
     allowInsecureHttp,
     submissionFormat: config.get<SubmissionFormat>("submissionFormat", "ask"),
     groupBy: config.get<LabGrouping>("groupBy", "course"),
+    courses: config.get<string[]>("courses", []).map((value) => value.trim()).filter(Boolean),
     exclude: config.get<string[]>("exclude", [".autolab/**", ".git/**", "node_modules/**", ".venv/**", "__pycache__/**"]),
   };
 }

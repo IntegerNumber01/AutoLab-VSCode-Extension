@@ -1,17 +1,43 @@
 import * as vscode from "vscode";
+import { isForbidden } from "./api";
+import type { AutolabApi } from "./api";
 import type { SessionManager } from "./auth";
 import { readSettings, validateConnectionSettings } from "./config";
+import {
+  assessmentFromDetails,
+  parseLabReferences,
+  placeholderAssessment,
+  placeholderCourse,
+} from "./manual";
+import type { ManualLab } from "./manual";
 import { findCurrentLab, localLabFor } from "./metadata";
 import type {
+  AutolabAssessment,
+  AutolabCourse,
   AutolabSubmission,
   DashboardAssessment,
 } from "./types";
 import { errorMessage, formatDate, formatNumber, submissionScore } from "./utils";
 
+/** Raised when nothing at all can be listed because the OAuth application lacks a scope. */
+export class MissingScopeError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "MissingScopeError";
+  }
+}
+
+/** What a load could not fetch, and whether a missing scope was the reason. */
+interface LoadReport {
+  messages: string[];
+  scopeLimited: boolean;
+}
+
 export class DashboardModel implements vscode.Disposable {
   private cache: DashboardAssessment[] | undefined;
   private loading: Promise<DashboardAssessment[]> | undefined;
   private generation = 0;
+  private report: LoadReport | undefined;
   private readonly changeEmitter = new vscode.EventEmitter<void>();
   readonly onDidChange = this.changeEmitter.event;
   private readonly sessionSubscription: vscode.Disposable;
@@ -29,7 +55,18 @@ export class DashboardModel implements vscode.Disposable {
     this.generation += 1;
     this.cache = undefined;
     this.loading = undefined;
+    this.report = undefined;
     this.changeEmitter.fire();
+  }
+
+  /** Explains anything the last load could not fetch, or undefined when it fetched everything. */
+  get accessNotice(): string | undefined {
+    return this.report?.messages.length ? [...new Set(this.report.messages)].join(" ") : undefined;
+  }
+
+  /** True when a missing scope, rather than a transient failure, limited the last load. */
+  get isScopeLimited(): boolean {
+    return this.report?.scopeLimited ?? false;
   }
 
   async load(): Promise<DashboardAssessment[]> {
@@ -63,15 +100,14 @@ export class DashboardModel implements vscode.Disposable {
       throw new Error("Sign in to see your labs.");
     }
 
+    this.report = undefined;
     const api = this.session.api();
-    const courses = await api.getCourses();
-    const assessmentsByCourse = await Promise.all(courses.map(async (course) => {
-      const result = await attempt(api.getAssessments(course.name));
-      return { course, assessments: result.value ?? [] };
-    }));
+    const manualLabs = parseLabReferences(readSettings().courses);
+    const report: LoadReport = { messages: [], scopeLimited: false };
+    const plans = await this.planCourses(api, manualLabs, report);
 
-    const items = await Promise.all(assessmentsByCourse.flatMap(({ course, assessments }) =>
-      assessments.map(async (assessment): Promise<DashboardAssessment> => {
+    const items = await Promise.all(plans.flatMap(({ course, entries }) =>
+      entries.map(async ({ assessment, discovered }): Promise<DashboardAssessment> => {
         const [detailsResult, submissionsResult, localLab] = await Promise.all([
           attempt(api.getAssessment(course.name, assessment.name)),
           attempt(api.getSubmissions(course.name, assessment.name)),
@@ -80,7 +116,8 @@ export class DashboardModel implements vscode.Disposable {
         const errors = [detailsResult.error, submissionsResult.error].filter(Boolean);
         return {
           course,
-          assessment,
+          // A manually added lab starts as a bare name; its real fields come from the details call.
+          assessment: discovered ? assessment : assessmentFromDetails(assessment.name, detailsResult.value),
           details: detailsResult.value,
           submissions: submissionsResult.value ?? [],
           localPath: localLab?.directory,
@@ -90,12 +127,86 @@ export class DashboardModel implements vscode.Disposable {
       }),
     ));
 
+    this.report = report;
     return items.sort((left, right) => {
       const leftDue = Date.parse(left.assessment.due_at ?? "") || Number.MAX_SAFE_INTEGER;
       const rightDue = Date.parse(right.assessment.due_at ?? "") || Number.MAX_SAFE_INTEGER;
       return leftDue - rightDue;
     });
   }
+
+  /**
+   * Works out which labs to load. Discovery uses `/courses` and the per-course assessment
+   * index, both of which need the `user_courses` scope; whatever they refuse is filled in
+   * from the labs the student added by URL.
+   */
+  private async planCourses(api: AutolabApi, manualLabs: ManualLab[], report: LoadReport): Promise<CoursePlan[]> {
+    let discoveredCourses: AutolabCourse[] | undefined;
+    try {
+      discoveredCourses = await api.getCourses();
+    } catch (error) {
+      if (!isForbidden(error)) {
+        throw error;
+      }
+      if (!manualLabs.length) {
+        throw new MissingScopeError(
+          "This Autolab application cannot list your courses because it is missing the user_courses scope. Add a lab by URL to keep working, or ask your instructor to add the scope.",
+        );
+      }
+      report.scopeLimited = true;
+      report.messages.push("Your courses cannot be listed with this Autolab application, so only labs added by URL are shown.");
+    }
+
+    const courses = new Map<string, AutolabCourse>();
+    for (const course of discoveredCourses ?? []) {
+      courses.set(course.name, course);
+    }
+    for (const lab of manualLabs) {
+      if (!courses.has(lab.course)) {
+        courses.set(lab.course, placeholderCourse(lab.course));
+      }
+    }
+
+    return Promise.all([...courses.values()].map(async (course) => {
+      const manualNames = manualLabs
+        .filter((lab) => lab.course === course.name && lab.assessment)
+        .map((lab) => lab.assessment as string);
+
+      let discovered: AutolabAssessment[] | undefined;
+      try {
+        discovered = await api.getAssessments(course.name);
+      } catch (error) {
+        if (!isForbidden(error)) {
+          report.messages.push(errorMessage(error));
+        } else if (!manualNames.length) {
+          report.scopeLimited = true;
+          report.messages.push(`Labs in ${course.display_name} cannot be listed with this Autolab application. Add one by URL.`);
+        }
+      }
+
+      const entries = new Map<string, CourseEntry>();
+      for (const assessment of discovered ?? []) {
+        entries.set(assessment.name, { assessment, discovered: true });
+      }
+      for (const name of manualNames) {
+        if (!entries.has(name)) {
+          entries.set(name, { assessment: placeholderAssessment(name), discovered: false });
+        }
+      }
+      return { course, entries: [...entries.values()] };
+    }));
+  }
+}
+
+interface CourseEntry {
+  assessment: AutolabAssessment;
+  /** False for a lab added by URL, whose fields are not known until details load. */
+  discovered: boolean;
+}
+
+interface CoursePlan {
+  course: AutolabCourse;
+  entries: CourseEntry[];
 }
 
 interface Attempt<T> {
@@ -131,6 +242,7 @@ interface MessageNode {
   type: "message";
   label: string;
   command?: vscode.Command;
+  icon?: string;
 }
 
 export class AssignmentsProvider implements vscode.TreeDataProvider<AssignmentNode>, vscode.Disposable {
@@ -156,7 +268,8 @@ export class AssignmentsProvider implements vscode.TreeDataProvider<AssignmentNo
     if (node.type === "message") {
       const item = new vscode.TreeItem(node.label, vscode.TreeItemCollapsibleState.None);
       item.command = node.command;
-      item.iconPath = new vscode.ThemeIcon(node.command ? "sign-in" : "info");
+      item.tooltip = node.label;
+      item.iconPath = new vscode.ThemeIcon(node.icon ?? (node.command ? "sign-in" : "info"));
       return item;
     }
 
@@ -193,11 +306,32 @@ export class AssignmentsProvider implements vscode.TreeDataProvider<AssignmentNo
 
     try {
       const items = await this.model.load();
+      const notice = this.model.accessNotice;
+      const noticeNodes: AssignmentNode[] = notice
+        ? [{
+          type: "message",
+          label: notice,
+          icon: "warning",
+          // Adding a lab by hand only helps when a missing scope, not a failed request, hid it.
+          command: this.model.isScopeLimited
+            ? { command: "autolab.addLab", title: "Add Lab by URL" }
+            : { command: "autolab.refresh", title: "Refresh" },
+        }]
+        : [];
       if (!items.length) {
-        return [{ type: "message", label: "No released labs found." }];
+        return [...noticeNodes, { type: "message", label: "No released labs found." }];
       }
-      return readSettings().groupBy === "status" ? groupByStatus(items) : groupByCourse(items);
+      const groups = readSettings().groupBy === "status" ? groupByStatus(items) : groupByCourse(items);
+      return [...groups, ...noticeNodes];
     } catch (error) {
+      if (error instanceof MissingScopeError) {
+        return [{
+          type: "message",
+          label: errorMessage(error),
+          icon: "warning",
+          command: { command: "autolab.addLab", title: "Add Lab by URL" },
+        }];
+      }
       const configured = Boolean(readSettings().host && readSettings().clientId);
       return [{
         type: "message",

@@ -32,6 +32,11 @@ export function joinHostPath(host: string, endpoint: string): string {
   return `${host}${endpoint.startsWith("/") ? endpoint : `/${endpoint}`}`;
 }
 
+/** Path of an assessment's page on the Autolab website, which is not the API path. */
+export function assessmentPath(course: string, assessment: string): string {
+  return `/courses/${encodeURIComponent(course)}/assessments/${encodeURIComponent(assessment)}`;
+}
+
 export function safePathSegment(value: string): string {
   const safe = value
     .trim()

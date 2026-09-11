@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.3.0
+
+- Kept working when the OAuth application is registered without the `user_courses` scope. Course and assessment listings are the only endpoints that require it, so the extension now falls back to labs the student names instead of failing to load.
+- Added `autolab.courses`, plus the **Add Lab by URL** and **Remove Labs Added by URL** commands, for naming a lab from its Autolab page URL or the `COURSE/LAB` shorthand.
+- Filled a manually added lab's display name, dates, and category from `assessments/:name`, which returns the same fields the assessment index would have.
+- Took problem names and maximum scores from the assessment's `max_scores` when the problems endpoint is unavailable, so the results panel still shows scores out of their maximum.
+- Fell back to the Autolab web page for handouts and writeups the API refuses, instead of failing the download.
+- Reported what could not be loaded in the Labs view, distinguishing a missing scope from a failed request.
+
 ## 0.2.0
 
 - Replaced the `adm-zip` dependency with a self-contained ZIP writer and reader built on Node's `zlib`, so packaging and extraction never invoke an operating-system archiver and behave identically on Windows, macOS, and Linux.

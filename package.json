@@ -2,7 +2,7 @@
   "name": "autolab",
   "displayName": "Autolab",
   "description": "Download, work on, submit, and review Autolab assignments without leaving VS Code.",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "engines": {
     "vscode": "^1.104.0"
   },
@@ -124,6 +124,17 @@
         "title": "Group Labs by Course or Status",
         "category": "Autolab",
         "icon": "$(list-tree)"
+      },
+      {
+        "command": "autolab.addLab",
+        "title": "Add Lab by URL",
+        "category": "Autolab",
+        "icon": "$(add)"
+      },
+      {
+        "command": "autolab.removeLab",
+        "title": "Remove Labs Added by URL",
+        "category": "Autolab"
       }
     ],
     "menus": {
@@ -152,6 +163,16 @@
           "command": "autolab.toggleGrouping",
           "when": "view == autolab.assignments",
           "group": "navigation@2"
+        },
+        {
+          "command": "autolab.addLab",
+          "when": "view == autolab.assignments",
+          "group": "navigation@3"
+        },
+        {
+          "command": "autolab.removeLab",
+          "when": "view == autolab.assignments",
+          "group": "1_autolab@1"
         }
       ],
       "view/item/context": [
@@ -211,6 +232,15 @@
           ],
           "default": "course",
           "description": "How the Labs view groups assessments."
+        },
+        "autolab.courses": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [],
+          "scope": "window",
+          "markdownDescription": "Labs to show when Autolab will not list your courses, because the OAuth application was registered without the `user_courses` scope. Each entry is a lab page URL such as `https://autolab.example.edu/courses/COURSE/assessments/LAB`, or the shorthand `COURSE/LAB`. Use **Autolab: Add Lab by URL** instead of editing this by hand."
         },
         "autolab.submissionFormat": {
           "type": "string",

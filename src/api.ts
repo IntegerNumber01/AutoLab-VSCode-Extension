@@ -22,6 +22,15 @@ export class AutolabApiError extends Error {
   }
 }
 
+/**
+ * True when Autolab refused the request for lack of an OAuth scope. Doorkeeper answers
+ * `403 insufficient_scope`, and Autolab's own `require_privilege` also raises `:forbidden`,
+ * so both mean "this application was registered without the scope this endpoint needs".
+ */
+export function isForbidden(error: unknown): boolean {
+  return error instanceof AutolabApiError && (error.status === 403 || error.code === "insufficient_scope");
+}
+
 type TokenProvider = (forceRefresh?: boolean) => Promise<string>;
 
 export class AutolabApi {

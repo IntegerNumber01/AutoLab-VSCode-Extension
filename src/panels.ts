@@ -9,6 +9,7 @@ import type {
   DashboardAssessment,
 } from "./types";
 import {
+  assessmentPath,
   errorMessage,
   escapeHtml,
   formatDate,
@@ -139,11 +140,14 @@ export class PanelManager implements vscode.Disposable {
     panel.webview.html = loadingHtml("Loading scores and feedback…");
 
     const api = this.session.api();
-    const [details, problems, submissions] = await Promise.all([
+    const [details, fetchedProblems, submissions] = await Promise.all([
       api.getAssessment(course, assessment),
       api.getProblems(course, assessment).catch(() => [] as AutolabProblem[]),
       api.getSubmissions(course, assessment),
     ]);
+    // `/problems` needs the user_courses scope, but the assessment itself reports every
+    // problem's maximum score, which is all this panel uses it for.
+    const problems = fetchedProblems.length ? fetchedProblems : problemsFromDetails(details);
 
     const submission = requestedVersion === undefined
       ? submissions[0]
@@ -196,9 +200,13 @@ interface ProblemFeedback {
   error?: string;
 }
 
+function problemsFromDetails(details: AutolabAssessmentDetails): AutolabProblem[] {
+  return Object.entries(details.max_scores ?? {}).map(([name, max_score]) => ({ name, max_score }));
+}
+
 function assessmentUrl(course: string, assessment: string): string {
   const host = readSettings().host;
-  return joinHostPath(host, `/courses/${encodeURIComponent(course)}/assessments/${encodeURIComponent(assessment)}`);
+  return joinHostPath(host, assessmentPath(course, assessment));
 }
 
 function assessmentHtml(item: DashboardAssessment): string {
