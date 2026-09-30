@@ -11,6 +11,7 @@ import {
   normalizeHost,
   parseAutograderFeedback,
   parseContentDisposition,
+  resolveExternalUrl,
   safePathSegment,
   submissionScore,
 } from "../utils";
@@ -26,6 +27,25 @@ suite("Autolab core safety and formatting", () => {
     assert.strictEqual(normalizeHost("http://localhost:3000", true), "http://localhost:3000");
   });
 
+  test("allows only safe external URLs and keeps sign-in on the configured origin", () => {
+    assert.strictEqual(
+      resolveExternalUrl("https://autolab.example.edu", "/oauth/authorize", true),
+      "https://autolab.example.edu/oauth/authorize",
+    );
+    assert.strictEqual(
+      resolveExternalUrl("https://autolab.example.edu", "https://files.example.edu/writeup.pdf"),
+      "https://files.example.edu/writeup.pdf",
+    );
+    assert.throws(
+      () => resolveExternalUrl("https://autolab.example.edu", "https://phishing.example/oauth", true),
+      /sign-in page/,
+    );
+    assert.throws(
+      () => resolveExternalUrl("https://autolab.example.edu", "vscode://malicious.extension/run"),
+      /unsafe vscode:/,
+    );
+  });
+
   test("creates filesystem-safe course and assessment names", () => {
     assert.strictEqual(safePathSegment("lab: one/intro?.zip"), "lab- one-intro-.zip");
     assert.strictEqual(safePathSegment("..."), "lab");
@@ -37,6 +57,9 @@ suite("Autolab core safety and formatting", () => {
     assert.strictEqual(isSafeArchivePath("starter/../../outside.txt"), false);
     assert.strictEqual(isSafeArchivePath("C:\\outside.txt"), false);
     assert.strictEqual(isSafeArchivePath("/outside.txt"), false);
+    assert.strictEqual(isSafeArchivePath("starter/file.txt:Zone.Identifier"), false);
+    assert.strictEqual(isSafeArchivePath("starter/CON"), false);
+    assert.strictEqual(isSafeArchivePath(`starter/${"x".repeat(4_100)}`), false);
   });
 
   test("detects whether a path stays within the lab", () => {

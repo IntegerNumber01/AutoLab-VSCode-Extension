@@ -205,13 +205,13 @@
         "autolab.host": {
           "type": "string",
           "default": "",
-          "scope": "window",
+          "scope": "machine",
           "description": "Base URL of your Autolab instance, for example https://autolab.example.edu."
         },
         "autolab.clientId": {
           "type": "string",
           "default": "",
-          "scope": "window",
+          "scope": "machine",
           "markdownDescription": "Public OAuth client ID provided by your instructor or administrator. Never enter a client secret."
         },
         "autolab.workspaceFolder": {
@@ -261,11 +261,13 @@
         },
         "autolab.exclude": {
           "type": "array",
+          "scope": "machine",
           "items": {
             "type": "string"
           },
           "default": [
             ".autolab/**",
+            ".vscode/**",
             ".git/**",
             "node_modules/**",
             ".venv/**",
@@ -281,7 +283,7 @@
             "**/id_ecdsa",
             "**/id_ed25519"
           ],
-          "markdownDescription": "Glob patterns excluded when packaging a lab folder. Common environment files and private keys are excluded by default. Review these if your assignment needs a normally excluded file."
+          "markdownDescription": "Additional glob patterns excluded when packaging a lab folder. Environment files, private keys, `.git`, `.autolab`, `.vscode`, virtual environments, and `node_modules` are always excluded. Use exact-file submission mode when an assignment deliberately requires one normally protected file."
         },
         "autolab.allowInsecureHttp": {
           "type": "boolean",

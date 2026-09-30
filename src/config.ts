@@ -2,8 +2,10 @@ import * as vscode from "vscode";
 import type { LabGrouping, SubmissionFormat } from "./types";
 import { normalizeHost } from "./utils";
 
-const DEFAULT_EXCLUDES = [
+/** These are always excluded from generated archives. Use exact-file mode to submit one deliberately. */
+const REQUIRED_EXCLUDES = [
   ".autolab/**",
+  ".vscode/**",
   ".git/**",
   "node_modules/**",
   ".venv/**",
@@ -48,6 +50,11 @@ export function readSettings(): ExtensionSettings {
     }
   }
 
+  const configuredExcludes = config.get<unknown>("exclude", []);
+  const extraExcludes = Array.isArray(configuredExcludes)
+    ? configuredExcludes.filter((value): value is string => typeof value === "string" && Boolean(value.trim()))
+    : [];
+
   return {
     host,
     clientId: config.get<string>("clientId", "").trim(),
@@ -56,7 +63,10 @@ export function readSettings(): ExtensionSettings {
     submissionFormat: config.get<SubmissionFormat>("submissionFormat", "ask"),
     groupBy: config.get<LabGrouping>("groupBy", "course"),
     courses: config.get<string[]>("courses", []).map((value) => value.trim()).filter(Boolean),
-    exclude: config.get<string[]>("exclude", DEFAULT_EXCLUDES),
+    exclude: [...new Set([
+      ...REQUIRED_EXCLUDES,
+      ...extraExcludes,
+    ])],
   };
 }
 

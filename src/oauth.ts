@@ -1,4 +1,4 @@
-import { responseError } from "./api";
+import { fetchBufferedResponse, responseErrorFromBytes } from "./api";
 import type { SessionTokens } from "./types";
 import { errorMessage, joinHostPath } from "./utils";
 
@@ -10,16 +10,19 @@ export async function revokeSession(session: SessionTokens): Promise<void> {
   });
 
   let response: Response;
+  let responseData: Uint8Array;
   try {
-    response = await fetch(joinHostPath(session.host, "/oauth/revoke"), {
+    const result = await fetchBufferedResponse(joinHostPath(session.host, "/oauth/revoke"), {
       method: "POST",
       headers: { "Content-Type": "application/x-www-form-urlencoded", "Accept": "application/json" },
       body,
     });
+    response = result.response;
+    responseData = result.data;
   } catch (error) {
     throw new Error(`Could not reach Autolab to revoke the session: ${errorMessage(error)}`);
   }
   if (!response.ok) {
-    throw await responseError(response);
+    throw responseErrorFromBytes(response, responseData);
   }
 }

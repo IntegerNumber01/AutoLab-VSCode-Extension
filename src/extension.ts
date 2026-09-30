@@ -113,7 +113,15 @@ export function activate(context: vscode.ExtensionContext): void {
         await openLabWindow(result.directory);
       } else if (choice === "Open Online Material") {
         for (const url of result.externalUrls) {
-          await vscode.env.openExternal(vscode.Uri.parse(url));
+          const destination = new URL(url);
+          const confirmation = await vscode.window.showWarningMessage(
+            `Open online course material on ${destination.origin}?`,
+            { modal: true, detail: destination.toString() },
+            "Open Link",
+          );
+          if (confirmation === "Open Link") {
+            await vscode.env.openExternal(vscode.Uri.parse(destination.toString()));
+          }
         }
       }
     }),

@@ -20,11 +20,14 @@ import {
   isPathInside,
   isSafeArchivePath,
   joinHostPath,
+  resolveExternalUrl,
   safePathSegment,
 } from "./utils";
 import { ZipArchive } from "./zip";
 
-const MAX_EXTRACTED_BYTES = 1_073_741_824;
+const MAX_EXTRACTED_BYTES = 268_435_456;
+const MAX_ARCHIVE_ENTRIES = 20_000;
+const MAX_ARCHIVE_PATH_DEPTH = 64;
 
 export interface DownloadResult {
   directory: string;
@@ -168,7 +171,7 @@ export class LabDownloader {
       return { kind, format: "none" };
     }
     if (attachment.kind === "url") {
-      const url = resolveAttachmentUrl(host, attachment.url);
+      const url = resolveExternalUrl(host, attachment.url);
       externalUrls.push(url);
       return { kind, format: "url", url };
     }
@@ -199,16 +202,19 @@ async function extractArchiveSafely(archivePath: string, destination: string): P
   if (lower.endsWith(".zip")) {
     const archive = await ZipArchive.open(archivePath);
     try {
+      if (archive.entries.length > MAX_ARCHIVE_ENTRIES) {
+        throw new Error(`The handout archive contains more than ${MAX_ARCHIVE_ENTRIES.toLocaleString()} entries.`);
+      }
       const expandedBytes = archive.entries.reduce(
         (total, entry) => total + (entry.isDirectory ? 0 : entry.size),
         0,
       );
       if (expandedBytes > MAX_EXTRACTED_BYTES) {
-        throw new Error("The handout archive expands beyond the 1 GB safety limit.");
+        throw new Error("The handout archive expands beyond the 256 MB safety limit.");
       }
 
       for (const entry of archive.entries) {
-        if (!isSafeArchivePath(entry.path)) {
+        if (!isSafeArchivePath(entry.path) || entry.path.split("/").length > MAX_ARCHIVE_PATH_DEPTH) {
           throw new Error(`The handout archive contains an unsafe path: ${entry.path}`);
         }
         const target = path.join(destination, ...entry.path.split("/"));
@@ -222,7 +228,7 @@ async function extractArchiveSafely(archivePath: string, destination: string): P
         if (entry.isSymbolicLink) {
           continue;
         }
-        if (await writeIfMissing(destination, target, await archive.read(entry))) {
+        if (await writeIfMissing(destination, target, await archive.read(entry, MAX_EXTRACTED_BYTES))) {
           await applyExecutableBit(destination, target, entry.unixMode);
         }
       }
@@ -234,22 +240,36 @@ async function extractArchiveSafely(archivePath: string, destination: string): P
 
   if (lower.endsWith(".tar") || lower.endsWith(".tar.gz") || lower.endsWith(".tgz")) {
     let expandedBytes = 0;
+    let entries = 0;
     await tar.extract({
       cwd: destination,
       file: archivePath,
       keep: true,
       preservePaths: false,
       strict: true,
+      maxDepth: MAX_ARCHIVE_PATH_DEPTH,
+      maxMetaEntrySize: 1_048_576,
+      maxDecompressionRatio: 200,
       filter: (entryPath, entry) => {
+        entries += 1;
+        if (entries > MAX_ARCHIVE_ENTRIES) {
+          throw new Error(`The handout archive contains more than ${MAX_ARCHIVE_ENTRIES.toLocaleString()} entries.`);
+        }
         const type = "type" in entry ? String(entry.type) : "";
         const safeTypes = new Set(["File", "OldFile", "ContiguousFile", "Directory", "GNUDumpDir"]);
+        if (!isSafeArchivePath(entryPath) || entryPath.split("/").length > MAX_ARCHIVE_PATH_DEPTH) {
+          throw new Error(`The handout archive contains an unsafe path: ${entryPath}`);
+        }
         if (type !== "Directory" && type !== "GNUDumpDir") {
+          if (!Number.isSafeInteger(entry.size) || entry.size < 0) {
+            throw new Error(`The handout archive contains an invalid size for ${entryPath}.`);
+          }
           expandedBytes += entry.size;
           if (expandedBytes > MAX_EXTRACTED_BYTES) {
-            throw new Error("The handout archive expands beyond the 1 GB safety limit.");
+            throw new Error("The handout archive expands beyond the 256 MB safety limit.");
           }
         }
-        return isSafeArchivePath(entryPath) && safeTypes.has(type);
+        return safeTypes.has(type);
       },
     });
     return true;
@@ -302,14 +322,6 @@ async function pathExists(filename: string): Promise<boolean> {
     return true;
   } catch {
     return false;
-  }
-}
-
-function resolveAttachmentUrl(host: string, value: string): string {
-  try {
-    return new URL(value, `${host}/`).toString();
-  } catch {
-    return joinHostPath(host, value);
   }
 }
 

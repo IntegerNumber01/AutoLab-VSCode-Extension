@@ -84,7 +84,7 @@ See the official [Autolab API overview](https://docs.autolabproject.com/api-over
 | `autolab.groupBy` | Group the Labs view by `course` (default) or by `status`. |
 | `autolab.courses` | Labs added by URL, used when the OAuth application cannot list courses. |
 | `autolab.submissionFormat` | Ask each time, ZIP, tar.gz, or select one exact file. |
-| `autolab.exclude` | Glob patterns left out of packaged folders. |
+| `autolab.exclude` | Additional glob patterns left out of packaged folders. Built-in secret and metadata exclusions cannot be removed by a workspace. |
 | `autolab.allowInsecureHttp` | Allows HTTP only for trusted local development. |
 
 Autolab's assessment API does not report the configured handin filename/type rule. For that reason, the default submission setting asks students whether to create a ZIP, create a tar.gz, or submit an exact file. Instructors should state the required form in the writeup. After a successful submission the chosen format is recorded in the lab's own metadata and offered first the next time.
@@ -108,7 +108,7 @@ Labs are placed under:
 <workspace>/<course-name>/<assessment-name>/
 ```
 
-Archives are retained under `.autolab/artifacts/`, and `.autolab/assessment.json` records only the server and assessment identity. It never contains access tokens, refresh tokens, passwords, or a client secret. The `.autolab/**` folder is excluded from packaged submissions by default.
+Archives are retained under `.autolab/artifacts/`, and `.autolab/assessment.json` records only the server and assessment identity. It never contains access tokens, refresh tokens, passwords, or a client secret. The `.autolab/**` and `.vscode/**` folders, common environment files, and private-key formats are always excluded from generated submissions. Use exact-file mode if an assignment deliberately requires one protected file.
 
 Re-downloading uses a missing-files-only policy. Existing source files are not replaced, even if a newer handout contains the same path.
 

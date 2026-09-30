@@ -4,7 +4,7 @@ import * as http from "http";
 import type { AddressInfo } from "net";
 import * as os from "os";
 import * as path from "path";
-import { AutolabApi } from "../api";
+import { AutolabApi, fetchBufferedResponse } from "../api";
 import { revokeSession } from "../oauth";
 
 suite("Autolab API client", () => {
@@ -77,6 +77,52 @@ suite("Autolab API client", () => {
       const api = new AutolabApi(server.url, async () => "token");
       const submissions = await api.getSubmissions("course", "lab");
       assert.deepStrictEqual(submissions.map((item) => item.version), [5, 2, 1]);
+    } finally {
+      await server.close();
+    }
+  });
+
+  test("rejects malformed submission versions before they reach the webview", async () => {
+    const server = await startServer((_request, response) => {
+      json(response, 200, [{ version: '"><button>spoofed', filename: "bad.zip", created_at: "now", scores: {} }]);
+    });
+
+    try {
+      const api = new AutolabApi(server.url, async () => "token");
+      await assert.rejects(() => api.getSubmissions("course", "lab"), /submission\.version/);
+    } finally {
+      await server.close();
+    }
+  });
+
+  test("rejects response bodies beyond the configured byte limit", async () => {
+    const server = await startServer((_request, response) => {
+      response.writeHead(200, { "Content-Type": "application/octet-stream", "Content-Length": "5" });
+      response.end("12345");
+    });
+
+    try {
+      await assert.rejects(
+        () => fetchBufferedResponse(`${server.url}/large`, { method: "GET" }, 1_000, 4),
+        /more than 4 bytes/,
+      );
+    } finally {
+      await server.close();
+    }
+  });
+
+  test("keeps the timeout active while reading the response body", async () => {
+    const server = await startServer((_request, response) => {
+      response.writeHead(200, { "Content-Type": "application/json" });
+      response.write("{");
+      setTimeout(() => response.end("}"), 200);
+    });
+
+    try {
+      await assert.rejects(
+        () => fetchBufferedResponse(`${server.url}/slow`, { method: "GET" }, 30, 1_024),
+        /did not respond/,
+      );
     } finally {
       await server.close();
     }

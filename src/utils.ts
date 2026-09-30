@@ -33,6 +33,36 @@ export function joinHostPath(host: string, endpoint: string): string {
   return `${host}${endpoint.startsWith("/") ? endpoint : `/${endpoint}`}`;
 }
 
+/**
+ * Resolves a URL supplied by Autolab without allowing it to invoke a local/custom
+ * protocol handler. OAuth destinations must stay on the configured origin; course
+ * materials may use another HTTPS origin (for example, a university file host).
+ */
+export function resolveExternalUrl(host: string, value: string, sameOrigin = false): string {
+  let base: URL;
+  let resolved: URL;
+  try {
+    base = new URL(host);
+    resolved = new URL(value, `${host}/`);
+  } catch {
+    throw new Error("Autolab returned an invalid external URL.");
+  }
+
+  if (resolved.username || resolved.password) {
+    throw new Error("Autolab returned an external URL containing credentials.");
+  }
+  const trustedLocalHttp = base.protocol === "http:"
+    && resolved.protocol === "http:"
+    && resolved.origin === base.origin;
+  if (resolved.protocol !== "https:" && !trustedLocalHttp) {
+    throw new Error(`Refusing to open an unsafe ${resolved.protocol || "unknown"} URL from Autolab.`);
+  }
+  if (sameOrigin && resolved.origin !== base.origin) {
+    throw new Error(`Refusing to open an Autolab sign-in page on ${resolved.origin}.`);
+  }
+  return resolved.toString();
+}
+
 /** Path of an assessment's page on the Autolab website, which is not the API path. */
 export function assessmentPath(course: string, assessment: string): string {
   return `/courses/${encodeURIComponent(course)}/assessments/${encodeURIComponent(assessment)}`;
@@ -85,7 +115,18 @@ export function isSafeArchivePath(entryPath: string): boolean {
     return false;
   }
   const normalized = entryPath.replace(/\\/g, "/");
-  return !normalized.split("/").some((part) => part === "..");
+  if (normalized.length > 4_096 || normalized.includes("\0")) {
+    return false;
+  }
+  const parts = normalized.split("/").filter((part, index, all) => part || index !== all.length - 1);
+  return !parts.some((part) => (
+    !part
+    || part === "."
+    || part === ".."
+    || /[<>:"|?*\u0000-\u001f]/.test(part)
+    || /[. ]$/.test(part)
+    || /^(?:con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)/i.test(part)
+  ));
 }
 
 export function parseContentDisposition(header: string | null): string | undefined {

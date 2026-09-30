@@ -300,13 +300,13 @@ function resultsHtml(
 
   const versions = allSubmissions.length > 1
     ? `<section><h2>Versions</h2><div class="actions">${allSubmissions.map((item) =>
-        `<button data-action="version" data-version="${item.version}"${item.version === submission.version ? ' class="primary"' : ""}>v${item.version}</button>`,
+        `<button data-action="version" data-version="${escapeHtml(item.version)}"${item.version === submission.version ? ' class="primary"' : ""}>v${escapeHtml(item.version)}</button>`,
       ).join("")}</div></section>`
     : "";
 
   return page(nonce, `
     <header>
-      <div class="eyebrow">Submission version ${submission.version} · ${escapeHtml(submission.filename)}</div>
+      <div class="eyebrow">Submission version ${escapeHtml(submission.version)} · ${escapeHtml(submission.filename)}</div>
       <h1>${escapeHtml(details.display_name)}</h1>
       <div class="badges">
         <span class="badge">${escapeHtml(scoreText)}</span>
@@ -376,7 +376,7 @@ function scoresTable(submission: AutolabSubmission, details?: AutolabAssessmentD
       : value === "unreleased" ? "Unreleased" : "—";
     return `<tr><td>${escapeHtml(problem)}</td><td class="numeric">${escapeHtml(valueText)}</td></tr>`;
   }).join("");
-  return `<section><h2>Latest submission</h2><p class="muted">Version ${submission.version} · ${escapeHtml(formatDate(submission.created_at) ?? submission.created_at)}</p><table><tbody>${rows || "<tr><td>Scores are pending</td><td>—</td></tr>"}</tbody></table></section>`;
+  return `<section><h2>Latest submission</h2><p class="muted">Version ${escapeHtml(submission.version)} · ${escapeHtml(formatDate(submission.created_at) ?? submission.created_at)}</p><table><tbody>${rows || "<tr><td>Scores are pending</td><td>—</td></tr>"}</tbody></table></section>`;
 }
 
 function resultsScoreTable(submission: AutolabSubmission, problems: AutolabProblem[]): string {

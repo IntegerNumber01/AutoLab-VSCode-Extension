@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+- Bounded API and attachment response sizes and kept request deadlines active through body consumption; cross-origin HTTP redirects now fail closed.
+- Hardened ZIP and tar extraction with entry, path-depth, decompression, expanded-size, and central-directory limits.
+- Made connection and exclusion settings immune to workspace overrides, and made secret, metadata, and editor-configuration exclusions mandatory for generated submissions.
+- Validated API response shapes at runtime, escaped submission versions in webviews, and restricted OAuth/external URLs to safe destinations.
+
 ## 0.3.0
 
 - Kept working when the OAuth application is registered without the `user_courses` scope. Course and assessment listings are the only endpoints that require it, so the extension now falls back to labs the student names instead of failing to load.

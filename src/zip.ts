@@ -23,6 +23,9 @@ const S_IFDIR = 0o040000;
 const S_IFLNK = 0o120000;
 const S_IFREG = 0o100000;
 const DOS_DIRECTORY_ATTRIBUTE = 0x10;
+const MAX_CENTRAL_DIRECTORY_BYTES = 32 * 1_024 * 1_024;
+const MAX_ZIP_ENTRIES = 20_000;
+const DEFAULT_MAX_ENTRY_BYTES = 268_435_456;
 
 type Bytes = Buffer<ArrayBufferLike>;
 
@@ -271,6 +274,7 @@ export interface ZipEntry {
 export class ZipArchive {
   private constructor(
     private readonly handle: fs.promises.FileHandle,
+    private readonly fileSize: number,
     readonly entries: ZipEntry[],
   ) {}
 
@@ -278,16 +282,22 @@ export class ZipArchive {
     const handle = await fs.promises.open(filename, "r");
     try {
       const { size } = await handle.stat();
-      return new ZipArchive(handle, await readCentralDirectory(handle, size));
+      return new ZipArchive(handle, size, await readCentralDirectory(handle, size));
     } catch (error) {
       await handle.close();
       throw error;
     }
   }
 
-  async read(entry: ZipEntry): Promise<Buffer> {
+  async read(entry: ZipEntry, maxOutputBytes = DEFAULT_MAX_ENTRY_BYTES): Promise<Buffer> {
     if (entry.isDirectory) {
       return Buffer.alloc(0);
+    }
+    if (entry.size > maxOutputBytes) {
+      throw new ZipFormatError(`The archive entry ${entry.path} exceeds the extraction limit.`);
+    }
+    if (entry.localHeaderOffset < 0 || entry.localHeaderOffset + 30 > this.fileSize) {
+      throw new ZipFormatError(`The archive entry ${entry.path} points outside the ZIP file.`);
     }
 
     const localHeader = await readExactly(this.handle, entry.localHeaderOffset, 30);
@@ -297,13 +307,26 @@ export class ZipArchive {
     const nameLength = localHeader.readUInt16LE(26);
     const extraLength = localHeader.readUInt16LE(28);
     const dataOffset = entry.localHeaderOffset + 30 + nameLength + extraLength;
+    if (dataOffset > this.fileSize || entry.compressedSize > this.fileSize - dataOffset) {
+      throw new ZipFormatError(`The archive entry ${entry.path} points outside the ZIP file.`);
+    }
     const compressed = await readExactly(this.handle, dataOffset, entry.compressedSize);
 
     let content: Bytes;
     if (entry.method === METHOD_STORE) {
       content = compressed;
     } else if (entry.method === METHOD_DEFLATE) {
-      content = await inflateRaw(compressed);
+      try {
+        content = await inflateRaw(compressed, {
+          maxOutputLength: Math.max(1, Math.min(entry.size, maxOutputBytes)),
+        });
+      } catch (error) {
+        throw new ZipFormatError(
+          error instanceof RangeError
+            ? `The archive entry ${entry.path} exceeds its declared or allowed size.`
+            : `The archive entry ${entry.path} could not be decompressed safely.`,
+        );
+      }
     } else {
       throw new ZipFormatError(
         `The archive entry ${entry.path} uses unsupported compression method ${entry.method}.`,
@@ -333,7 +356,10 @@ async function readCentralDirectory(handle: fs.promises.FileHandle, fileSize: nu
 
   let endOffset = -1;
   for (let index = tail.length - 22; index >= 0; index -= 1) {
-    if (tail.readUInt32LE(index) === END_OF_CENTRAL_DIRECTORY_SIGNATURE) {
+    if (
+      tail.readUInt32LE(index) === END_OF_CENTRAL_DIRECTORY_SIGNATURE
+      && index + 22 + tail.readUInt16LE(index + 20) === tail.length
+    ) {
       endOffset = index;
       break;
     }
@@ -352,6 +378,9 @@ async function readCentralDirectory(handle: fs.promises.FileHandle, fileSize: nu
       throw new ZipFormatError("The ZIP archive is missing its ZIP64 locator.");
     }
     const zip64Offset = asSafeNumber(tail.readBigUInt64LE(locatorOffset + 8), "ZIP64 directory offset");
+    if (zip64Offset > fileSize - 56) {
+      throw new ZipFormatError("The ZIP64 directory record points outside the archive.");
+    }
     const zip64Record = await readExactly(handle, zip64Offset, 56);
     if (zip64Record.readUInt32LE(0) !== ZIP64_END_OF_CENTRAL_DIRECTORY_SIGNATURE) {
       throw new ZipFormatError("The ZIP archive has a damaged ZIP64 directory record.");
@@ -359,6 +388,16 @@ async function readCentralDirectory(handle: fs.promises.FileHandle, fileSize: nu
     entryCount = asSafeNumber(zip64Record.readBigUInt64LE(32), "ZIP64 entry count");
     directorySize = asSafeNumber(zip64Record.readBigUInt64LE(40), "ZIP64 directory size");
     directoryOffset = asSafeNumber(zip64Record.readBigUInt64LE(48), "ZIP64 directory offset");
+  }
+
+  if (entryCount > MAX_ZIP_ENTRIES) {
+    throw new ZipFormatError(`The ZIP archive contains more than ${MAX_ZIP_ENTRIES.toLocaleString()} entries.`);
+  }
+  if (directorySize > MAX_CENTRAL_DIRECTORY_BYTES) {
+    throw new ZipFormatError("The ZIP central directory exceeds the safety limit.");
+  }
+  if (directoryOffset > fileSize || directorySize > fileSize - directoryOffset) {
+    throw new ZipFormatError("The ZIP central directory points outside the archive.");
   }
 
   const directory = await readExactly(handle, directoryOffset, directorySize);
@@ -377,6 +416,10 @@ async function readCentralDirectory(handle: fs.promises.FileHandle, fileSize: nu
     const nameLength = directory.readUInt16LE(cursor + 28);
     const extraLength = directory.readUInt16LE(cursor + 30);
     const commentLength = directory.readUInt16LE(cursor + 32);
+    const recordLength = 46 + nameLength + extraLength + commentLength;
+    if (recordLength > directory.length - cursor) {
+      throw new ZipFormatError("The ZIP archive has a truncated central-directory entry.");
+    }
     const externalAttributes = directory.readUInt32LE(cursor + 38);
 
     const name = directory.subarray(cursor + 46, cursor + 46 + nameLength).toString("utf8");
@@ -413,7 +456,11 @@ async function readCentralDirectory(handle: fs.promises.FileHandle, fileSize: nu
       localHeaderOffset,
     });
 
-    cursor += 46 + nameLength + extraLength + commentLength;
+    cursor += recordLength;
+  }
+
+  if (cursor !== directory.length) {
+    throw new ZipFormatError("The ZIP central directory contains unexpected trailing data.");
   }
 
   return entries;

@@ -220,6 +220,39 @@ suite("Portable ZIP writer and reader", () => {
     }
   });
 
+  test("bounds actual inflated output even when an entry lies about its size", async () => {
+    const sourcePath = path.join(workspace, "bomb.txt");
+    await fs.promises.writeFile(sourcePath, "highly compressible ".repeat(10_000), "utf8");
+    const archivePath = path.join(workspace, "lying-size.zip");
+    await createZipFile(archivePath, [{ archivePath: "bomb.txt", sourcePath }]);
+
+    const raw = await fs.promises.readFile(archivePath);
+    const endOffset = raw.length - 22;
+    const directoryOffset = raw.readUInt32LE(endOffset + 16);
+    raw.writeUInt32LE(1, 22);
+    raw.writeUInt32LE(1, directoryOffset + 24);
+    await fs.promises.writeFile(archivePath, raw);
+
+    const archive = await ZipArchive.open(archivePath);
+    try {
+      await assert.rejects(() => archive.read(archive.entries[0]), /decompressed safely|allowed size/);
+    } finally {
+      await archive.close();
+    }
+  });
+
+  test("rejects an impossible central-directory size before allocating it", async () => {
+    const sourcePath = path.join(workspace, "small.txt");
+    await fs.promises.writeFile(sourcePath, "small", "utf8");
+    const archivePath = path.join(workspace, "huge-directory.zip");
+    await createZipFile(archivePath, [{ archivePath: "small.txt", sourcePath }]);
+
+    const raw = await fs.promises.readFile(archivePath);
+    raw.writeUInt32LE(0xffff_fffe, raw.length - 22 + 12);
+    await fs.promises.writeFile(archivePath, raw);
+    await assert.rejects(() => ZipArchive.open(archivePath), /central directory/);
+  });
+
   test("refuses a file that is not a ZIP archive", async () => {
     const archivePath = path.join(workspace, "not-a-zip.bin");
     await fs.promises.writeFile(archivePath, Buffer.alloc(2048, 7));
