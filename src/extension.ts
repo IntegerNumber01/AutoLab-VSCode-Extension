@@ -58,8 +58,18 @@ export function activate(context: vscode.ExtensionContext): void {
         "Sign Out",
       );
       if (choice === "Sign Out") {
-        await session.signOut();
+        const result = await session.signOut();
         refreshAll();
+        if (result.revocationError) {
+          const action = await vscode.window.showWarningMessage(
+            `Signed out locally, but Autolab could not confirm token revocation: ${result.revocationError}`,
+            { modal: true, detail: "Open Autolab's instructions, then use Account → Manage Authorized Clients to revoke this app." },
+            "Open Instructions",
+          );
+          if (action === "Open Instructions") {
+            await vscode.env.openExternal(vscode.Uri.parse("https://docs.autolabproject.com/api-managing-authorized-apps/"));
+          }
+        }
       }
     }),
     register("autolab.selectWorkspace", async () => {

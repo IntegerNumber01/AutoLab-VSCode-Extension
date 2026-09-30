@@ -1,6 +1,7 @@
 import * as vscode from "vscode";
 import { AutolabApi, AutolabApiError, responseError } from "./api";
 import { validateConnectionSettings } from "./config";
+import { revokeSession } from "./oauth";
 import type { SessionTokens } from "./types";
 import { errorMessage, joinHostPath } from "./utils";
 
@@ -17,6 +18,10 @@ interface DeviceInitResponse {
   device_code: string;
   user_code: string;
   verification_uri: string;
+}
+
+export interface SignOutResult {
+  revocationError?: string;
 }
 
 export class SessionManager implements vscode.Disposable {
@@ -91,9 +96,19 @@ export class SessionManager implements vscode.Disposable {
     this.changeEmitter.fire();
   }
 
-  async signOut(): Promise<void> {
+  async signOut(): Promise<SignOutResult> {
+    const session = await this.readSession();
+    let revocationError: string | undefined;
+    if (session) {
+      try {
+        await revokeSession(session);
+      } catch (error) {
+        revocationError = errorMessage(error);
+      }
+    }
     await this.secrets.delete(SESSION_KEY);
     this.changeEmitter.fire();
+    return { revocationError };
   }
 
   async getAccessToken(forceRefresh = false): Promise<string> {

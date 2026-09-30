@@ -5,6 +5,7 @@ import type { AddressInfo } from "net";
 import * as os from "os";
 import * as path from "path";
 import { AutolabApi } from "../api";
+import { revokeSession } from "../oauth";
 
 suite("Autolab API client", () => {
   test("uses bearer authentication and refreshes once after a 401", async () => {
@@ -130,6 +131,37 @@ suite("Autolab API client", () => {
         server.close(),
         fs.promises.rm(temporaryDirectory, { recursive: true, force: true }),
       ]);
+    }
+  });
+
+  test("revokes a public-client session with its refresh token", async () => {
+    let requestMethod = "";
+    let requestBody = "";
+    const server = await startServer((request, response) => {
+      requestMethod = request.method ?? "";
+      const chunks: Buffer[] = [];
+      request.on("data", (chunk: Buffer) => chunks.push(chunk));
+      request.on("end", () => {
+        requestBody = Buffer.concat(chunks).toString("utf8");
+        json(response, 200, {});
+      });
+    });
+
+    try {
+      await revokeSession({
+        host: server.url,
+        clientId: "public-client",
+        accessToken: "access-token",
+        refreshToken: "refresh-token",
+        expiresAt: Date.now() + 60_000,
+      });
+      assert.strictEqual(requestMethod, "POST");
+      assert.deepStrictEqual(
+        Object.fromEntries(new URLSearchParams(requestBody)),
+        { client_id: "public-client", token: "refresh-token", token_type_hint: "refresh_token" },
+      );
+    } finally {
+      await server.close();
     }
   });
 });
