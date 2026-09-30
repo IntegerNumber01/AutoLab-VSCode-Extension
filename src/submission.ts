@@ -173,9 +173,9 @@ export class SubmissionManager {
   private async packageFolder(
     directory: string,
     format: Exclude<SubmissionFormat, "ask" | "file">,
-  ): Promise<PreparedSubmission> {
+  ): Promise<PreparedSubmission | undefined> {
     const settings = readSettings();
-    const files = await fg("**/*", {
+    let files = await fg("**/*", {
       cwd: directory,
       onlyFiles: true,
       dot: true,
@@ -185,6 +185,22 @@ export class SubmissionManager {
     files.sort((left, right) => left.localeCompare(right));
     if (files.length === 0) {
       throw new Error("No files remain after applying the Autolab exclude patterns.");
+    }
+
+    const reviewed = await vscode.window.showQuickPick<SubmissionFilePick>(
+      files.map((file) => ({ label: file, file, picked: true })),
+      {
+        canPickMany: true,
+        placeHolder: "Review the files, deselect anything that should not be submitted, then press Enter.",
+        title: `Autolab: Review ${files.length} Submission ${files.length === 1 ? "File" : "Files"}`,
+      },
+    );
+    if (!reviewed) {
+      return undefined;
+    }
+    files = reviewed.map((item) => item.file);
+    if (files.length === 0) {
+      throw new Error("Select at least one file to submit.");
     }
 
     let totalBytes = 0;
@@ -225,6 +241,10 @@ export class SubmissionManager {
 
 interface FormatPick extends vscode.QuickPickItem {
   format: Exclude<SubmissionFormat, "ask">;
+}
+
+interface SubmissionFilePick extends vscode.QuickPickItem {
+  file: string;
 }
 
 interface PreparedSubmission {

@@ -269,9 +269,19 @@
             ".git/**",
             "node_modules/**",
             ".venv/**",
-            "__pycache__/**"
+            "__pycache__/**",
+            "**/.env*",
+            "**/.ssh/**",
+            "**/*.pem",
+            "**/*.key",
+            "**/*.p12",
+            "**/*.pfx",
+            "**/id_rsa",
+            "**/id_dsa",
+            "**/id_ecdsa",
+            "**/id_ed25519"
           ],
-          "markdownDescription": "Glob patterns excluded when packaging a lab folder. Review these if your assignment needs a normally excluded folder."
+          "markdownDescription": "Glob patterns excluded when packaging a lab folder. Common environment files and private keys are excluded by default. Review these if your assignment needs a normally excluded file."
         },
         "autolab.allowInsecureHttp": {
           "type": "boolean",

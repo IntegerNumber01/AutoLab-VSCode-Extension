@@ -2,6 +2,24 @@ import * as vscode from "vscode";
 import type { LabGrouping, SubmissionFormat } from "./types";
 import { normalizeHost } from "./utils";
 
+const DEFAULT_EXCLUDES = [
+  ".autolab/**",
+  ".git/**",
+  "node_modules/**",
+  ".venv/**",
+  "__pycache__/**",
+  "**/.env*",
+  "**/.ssh/**",
+  "**/*.pem",
+  "**/*.key",
+  "**/*.p12",
+  "**/*.pfx",
+  "**/id_rsa",
+  "**/id_dsa",
+  "**/id_ecdsa",
+  "**/id_ed25519",
+];
+
 export interface ConnectionSettings {
   host: string;
   clientId: string;
@@ -38,7 +56,7 @@ export function readSettings(): ExtensionSettings {
     submissionFormat: config.get<SubmissionFormat>("submissionFormat", "ask"),
     groupBy: config.get<LabGrouping>("groupBy", "course"),
     courses: config.get<string[]>("courses", []).map((value) => value.trim()).filter(Boolean),
-    exclude: config.get<string[]>("exclude", [".autolab/**", ".git/**", "node_modules/**", ".venv/**", "__pycache__/**"]),
+    exclude: config.get<string[]>("exclude", DEFAULT_EXCLUDES),
   };
 }
 
