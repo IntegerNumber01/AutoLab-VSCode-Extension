@@ -1,3 +1,4 @@
+import * as fs from "fs";
 import * as path from "path";
 import type { AutolabScore, AutolabSubmission } from "./types";
 
@@ -49,6 +50,34 @@ export function safePathSegment(value: string): string {
 export function isPathInside(root: string, candidate: string): boolean {
   const relative = path.relative(path.resolve(root), path.resolve(candidate));
   return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
+}
+
+/** Rejects an existing symlink or junction anywhere along a path before a write. */
+export async function assertNoSymbolicLinkPath(root: string, candidate: string): Promise<void> {
+  const resolvedRoot = path.resolve(root);
+  const resolvedCandidate = path.resolve(candidate);
+  if (!isPathInside(resolvedRoot, resolvedCandidate)) {
+    throw new Error(`Refusing to write outside ${resolvedRoot}.`);
+  }
+
+  const relative = path.relative(resolvedRoot, resolvedCandidate);
+  const parts = relative ? relative.split(path.sep) : [];
+  let current = resolvedRoot;
+  for (let index = -1; index < parts.length; index += 1) {
+    if (index >= 0) {
+      current = path.join(current, parts[index]);
+    }
+    try {
+      if ((await fs.promises.lstat(current)).isSymbolicLink()) {
+        throw new Error(`Refusing to write through the symbolic link ${current}.`);
+      }
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+        return;
+      }
+      throw error;
+    }
+  }
 }
 
 export function isSafeArchivePath(entryPath: string): boolean {

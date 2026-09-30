@@ -1,6 +1,10 @@
 import * as assert from "assert";
+import * as fs from "fs";
+import * as os from "os";
+import * as path from "path";
 import type { AutolabSubmission } from "../types";
 import {
+  assertNoSymbolicLinkPath,
   formatBytes,
   isPathInside,
   isSafeArchivePath,
@@ -41,6 +45,31 @@ suite("Autolab core safety and formatting", () => {
     const outside = process.platform === "win32" ? "C:\\labs\\lab2\\secret" : "/labs/lab2/secret";
     assert.strictEqual(isPathInside(root, inside), true);
     assert.strictEqual(isPathInside(root, outside), false);
+  });
+
+  test("rejects writes through an existing directory symlink", async function () {
+    const workspace = await fs.promises.mkdtemp(path.join(os.tmpdir(), "autolab-symlink-test-"));
+    const lab = path.join(workspace, "lab");
+    const outside = path.join(workspace, "outside");
+    const link = path.join(lab, "redirect");
+    await Promise.all([fs.promises.mkdir(lab), fs.promises.mkdir(outside)]);
+    try {
+      try {
+        await fs.promises.symlink(outside, link, process.platform === "win32" ? "junction" : "dir");
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === "EPERM") {
+          this.skip();
+          return;
+        }
+        throw error;
+      }
+      await assert.rejects(
+        assertNoSymbolicLinkPath(lab, path.join(link, "escaped.txt")),
+        /symbolic link/,
+      );
+    } finally {
+      await fs.promises.rm(workspace, { recursive: true, force: true });
+    }
   });
 
   test("parses regular and RFC 5987 download filenames", () => {

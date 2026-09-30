@@ -14,7 +14,14 @@ import type {
   LabArtifact,
   LabMetadata,
 } from "./types";
-import { assessmentPath, isPathInside, isSafeArchivePath, joinHostPath, safePathSegment } from "./utils";
+import {
+  assertNoSymbolicLinkPath,
+  assessmentPath,
+  isPathInside,
+  isSafeArchivePath,
+  joinHostPath,
+  safePathSegment,
+} from "./utils";
 import { ZipArchive } from "./zip";
 
 const MAX_EXTRACTED_BYTES = 1_073_741_824;
@@ -38,11 +45,14 @@ export class LabDownloader {
       throw new Error("Choose an Autolab workspace folder before downloading a lab.");
     }
 
+    await fs.promises.mkdir(settings.workspaceFolder, { recursive: true });
+    const workspaceRoot = await fs.promises.realpath(settings.workspaceFolder);
     const directory = path.join(
-      settings.workspaceFolder,
+      workspaceRoot,
       safePathSegment(course.name),
       safePathSegment(assessment.name),
     );
+    await assertNoSymbolicLinkPath(workspaceRoot, directory);
     const storedMetadata = await readLabMetadata(directory);
     if (storedMetadata && (
       storedMetadata.host !== settings.host
@@ -77,7 +87,7 @@ export class LabDownloader {
       }
     }
 
-    await fs.promises.mkdir(directory, { recursive: true });
+    await createDirectorySafely(workspaceRoot, directory);
     return vscode.window.withProgress(
       { location: vscode.ProgressLocation.Notification, title: `Downloading ${assessment.display_name}`, cancellable: false },
       async (progress) => {
@@ -166,14 +176,15 @@ export class LabDownloader {
     const filename = safePathSegment(attachment.filename);
     if (isArchive(filename)) {
       const artifactDirectory = path.join(directory, METADATA_DIRECTORY, "artifacts");
-      await fs.promises.mkdir(artifactDirectory, { recursive: true });
+      await createDirectorySafely(directory, artifactDirectory);
       const archivePath = path.join(artifactDirectory, filename);
+      await assertNoSymbolicLinkPath(directory, archivePath);
       await fs.promises.writeFile(archivePath, attachment.data);
       const extracted = await extractArchiveSafely(archivePath, directory);
       return { kind, format: "file", filename, extracted };
     }
 
-    await writeIfMissing(path.join(directory, filename), attachment.data);
+    await writeIfMissing(directory, path.join(directory, filename), attachment.data);
     return { kind, format: "file", filename, extracted: false };
   }
 }
@@ -183,6 +194,7 @@ export async function openLabWindow(directory: string): Promise<void> {
 }
 
 async function extractArchiveSafely(archivePath: string, destination: string): Promise<boolean> {
+  await assertNoSymbolicLinkPath(destination, destination);
   const lower = archivePath.toLowerCase();
   if (lower.endsWith(".zip")) {
     const archive = await ZipArchive.open(archivePath);
@@ -204,15 +216,14 @@ async function extractArchiveSafely(archivePath: string, destination: string): P
           throw new Error(`The handout archive tried to write outside the lab: ${entry.path}`);
         }
         if (entry.isDirectory) {
-          await fs.promises.mkdir(target, { recursive: true });
+          await createDirectorySafely(destination, target);
           continue;
         }
         if (entry.isSymbolicLink) {
           continue;
         }
-        await fs.promises.mkdir(path.dirname(target), { recursive: true });
-        if (await writeIfMissing(target, await archive.read(entry))) {
-          await applyExecutableBit(target, entry.unixMode);
+        if (await writeIfMissing(destination, target, await archive.read(entry))) {
+          await applyExecutableBit(destination, target, entry.unixMode);
         }
       }
     } finally {
@@ -252,8 +263,9 @@ function isArchive(filename: string): boolean {
 }
 
 /** Returns true when the file was created, false when student work was already there. */
-async function writeIfMissing(filename: string, data: Uint8Array): Promise<boolean> {
-  await fs.promises.mkdir(path.dirname(filename), { recursive: true });
+async function writeIfMissing(root: string, filename: string, data: Uint8Array): Promise<boolean> {
+  await createDirectorySafely(root, path.dirname(filename));
+  await assertNoSymbolicLinkPath(root, filename);
   try {
     await fs.promises.writeFile(filename, data, { flag: "wx" });
     return true;
@@ -265,12 +277,19 @@ async function writeIfMissing(filename: string, data: Uint8Array): Promise<boole
   }
 }
 
+async function createDirectorySafely(root: string, directory: string): Promise<void> {
+  await assertNoSymbolicLinkPath(root, directory);
+  await fs.promises.mkdir(directory, { recursive: true });
+  await assertNoSymbolicLinkPath(root, directory);
+}
+
 /** Keeps instructor-provided scripts runnable. Windows has no executable bit to restore. */
-async function applyExecutableBit(filename: string, unixMode: number | undefined): Promise<void> {
+async function applyExecutableBit(root: string, filename: string, unixMode: number | undefined): Promise<void> {
   if (process.platform === "win32" || unixMode === undefined || !(unixMode & 0o111)) {
     return;
   }
   try {
+    await assertNoSymbolicLinkPath(root, filename);
     await fs.promises.chmod(filename, 0o755);
   } catch {
     // A lab folder on a filesystem without permission bits still holds usable file contents.

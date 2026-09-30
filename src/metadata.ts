@@ -3,7 +3,7 @@ import * as path from "path";
 import * as vscode from "vscode";
 import { readSettings } from "./config";
 import type { AutolabAssessment, AutolabCourse, LabMetadata } from "./types";
-import { isPathInside, safePathSegment } from "./utils";
+import { assertNoSymbolicLinkPath, isPathInside, safePathSegment } from "./utils";
 
 export const METADATA_DIRECTORY = ".autolab";
 export const METADATA_FILENAME = "assessment.json";
@@ -45,9 +45,12 @@ export async function readLabMetadata(directory: string): Promise<LabMetadata | 
 
 export async function writeLabMetadata(directory: string, metadata: LabMetadata): Promise<void> {
   const metadataDirectory = path.join(directory, METADATA_DIRECTORY);
+  await assertNoSymbolicLinkPath(directory, metadataDirectory);
   await fs.promises.mkdir(metadataDirectory, { recursive: true });
+  const filename = path.join(metadataDirectory, METADATA_FILENAME);
+  await assertNoSymbolicLinkPath(directory, filename);
   await fs.promises.writeFile(
-    path.join(metadataDirectory, METADATA_FILENAME),
+    filename,
     `${JSON.stringify(metadata, null, 2)}\n`,
     "utf8",
   );
