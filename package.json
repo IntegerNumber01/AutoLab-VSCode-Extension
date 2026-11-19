@@ -4,7 +4,7 @@
   "description": "Download, work on, submit, and review Autolab assignments without leaving VS Code.",
   "version": "0.3.0",
   "engines": {
-    "vscode": "^1.104.0"
+    "vscode": "^1.106.0"
   },
   "categories": [
     "Other"
@@ -20,7 +20,9 @@
   "activationEvents": [
     "onView:autolab.account",
     "onView:autolab.assignments",
-    "onView:autolab.submissions"
+    "onView:autolab.submissions",
+    "onView:autolab.details",
+    "workspaceContains:**/.autolab/assessment.json"
   ],
   "main": "./dist/extension.js",
   "contributes": {
@@ -29,6 +31,13 @@
         {
           "id": "autolab",
           "title": "Autolab",
+          "icon": "resources/logo.svg"
+        }
+      ],
+      "secondarySidebar": [
+        {
+          "id": "autolab-lab",
+          "title": "Current Lab",
           "icon": "resources/logo.svg"
         }
       ]
@@ -42,10 +51,17 @@
         {
           "id": "autolab.assignments",
           "name": "LABS"
+        }
+      ],
+      "autolab-lab": [
+        {
+          "id": "autolab.details",
+          "name": "LAB DETAILS & FEEDBACK",
+          "type": "webview"
         },
         {
           "id": "autolab.submissions",
-          "name": "CURRENT LAB"
+          "name": "RUN HISTORY"
         }
       ]
     },
@@ -92,9 +108,9 @@
       },
       {
         "command": "autolab.openLab",
-        "title": "Open Lab in New Window",
+        "title": "Open Lab in Workspace",
         "category": "Autolab",
-        "icon": "$(link-external)"
+        "icon": "$(folder-opened)"
       },
       {
         "command": "autolab.submit",
@@ -151,7 +167,7 @@
         },
         {
           "command": "autolab.refresh",
-          "when": "view == autolab.assignments || view == autolab.submissions",
+          "when": "view == autolab.assignments || view == autolab.details",
           "group": "navigation@1"
         },
         {

@@ -193,7 +193,18 @@ export class LabDownloader {
 }
 
 export async function openLabWindow(directory: string): Promise<void> {
-  await vscode.commands.executeCommand("vscode.openFolder", vscode.Uri.file(directory), { forceNewWindow: true });
+  const uri = vscode.Uri.file(directory);
+  const folders = vscode.workspace.workspaceFolders ?? [];
+  // Save the selection before VS Code can restart the extension host.
+  await vscode.commands.executeCommand("autolab.prepareLab", directory);
+  if (!folders.some((folder) => folder.uri.toString() === uri.toString())) {
+    // Keep the extension (including an F5 development host) in this window.
+    // Adding a first folder may restart the host; metadata activation restores the lab.
+    if (!vscode.workspace.updateWorkspaceFolders(folders.length, 0, { uri })) {
+      throw new Error("VS Code could not add the lab folder to this workspace.");
+    }
+  }
+  await vscode.commands.executeCommand("autolab.focusLab", directory);
 }
 
 async function extractArchiveSafely(archivePath: string, destination: string): Promise<boolean> {

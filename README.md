@@ -1,6 +1,6 @@
 # Autolab for VS Code
 
-Autolab for VS Code gives students one place to see released labs, due dates, submission state, scores, and feedback. It downloads each lab into a designated workspace, opens it in a focused VS Code window, and submits it back to any compatible Autolab instance.
+Autolab for VS Code gives students one place to see released labs, due dates, submission state, scores, and feedback. It downloads each lab into a designated folder, adds it to the current VS Code workspace, and keeps lab details, feedback, and runs in the right-hand sidebar so your files stay open on the left.
 
 ## Student workflow
 
@@ -9,9 +9,13 @@ Autolab for VS Code gives students one place to see released labs, due dates, su
 3. Choose a folder where courses and labs should be downloaded.
 4. Open the activation page, paste the six-character code, and approve access.
 5. Select a lab in **Labs** to see dates, status, scores, and handout details.
-6. Download the lab. The extension offers to open it in a new VS Code window.
-7. In that lab window, use the Autolab status-bar item or **Autolab: Submit Current Lab**.
-8. Review the exact package summary, confirm once, and view scores and feedback in VS Code.
+6. Download the lab. It opens automatically as a folder in the current workspace, including when debugging with F5.
+7. Use **Submit** in the sidebar, the Autolab status-bar item, or **Autolab: Submit Current Lab**.
+8. Review the package summary and confirm. Scores and feedback appear automatically in **Lab Details & Feedback** in the right-hand sidebar; **Run History** below it lists previous submissions.
+
+Opening a downloaded lab folder directly activates Autolab from its `.autolab/assessment.json` metadata. In a workspace containing several labs, opening a source file switches the current lab; **Open Lab in Workspace** explicitly selects a lab without closing your editors. VS Code may restart the extension host when it adds the first folder or converts a single folder into a workspace. The extension saves your lab selection before that change and restores it on activation.
+
+Compiler locations such as `src/main.c:12:4`, Python tracebacks, JavaScript stacks, and Windows compiler locations become clickable when they match a local lab file. Explicit compiler errors and warnings also appear in **Problems** and in the editor, labeled with the submission version. Grader path prefixes are matched against local paths; ambiguous filenames and missing files stay as plain text. Logs refer to the submitted version, while source links open your current files, which may have changed. Feedback without a filename and line number remains readable output.
 
 The extension never asks for an Autolab password or OAuth client secret. Sign-in happens only on the configured Autolab website.
 
@@ -25,9 +29,9 @@ The extension never asks for an Autolab password or OAuth client secret. Sign-in
 - Handout and writeup downloads with support for files and external URLs.
 - Safe ZIP, tar, tar.gz, and tgz extraction. Archive paths are validated, symlinks are ignored, and existing student files are never overwritten.
 - A self-contained ZIP writer and reader built on Node's own `zlib`. No `zip`, `tar`, PowerShell, or other operating-system archiver is ever invoked, so Windows, macOS, and Linux produce identical archives.
-- Per-lab `.autolab/assessment.json` metadata so a dedicated lab window knows where to submit.
+- Per-lab `.autolab/assessment.json` metadata for automatic lab detection and submission routing, including folders moved from their original download location.
 - ZIP, tar.gz, or exact-file submission modes with configurable excludes and a final confirmation.
-- Submission history, per-problem scores, and per-problem autograder feedback rendered in VS Code, with the trailing autograder JSON summary shown as a table.
+- Right-hand sidebar submission history, version switching, per-problem scores, and autograder feedback, with the trailing JSON summary shown as a table and recognized source locations linked to code.
 - Optional grouping of the Labs view by status (To do, Awaiting score, Graded, Not open yet, Closed) instead of by course.
 - A short, cancellable poll after each submission to an autograded lab, so the score appears without manual refreshing.
 - Automatic access-token refresh and a clear reauthorization path after revocation.
@@ -126,10 +130,12 @@ npm run package
 
 Press `F5` in VS Code to launch the Extension Development Host.
 
+Download and open labs inside that development host. **Open Lab in Workspace** keeps the development extension in the same window. A separately launched normal VS Code window needs an installed copy of the extension to show Autolab.
+
 `npm test` runs the platform-independent unit suite. `npm run test:extension` runs the same compiled tests in a VS Code Electron host and is useful in CI or local paths that the VS Code test launcher can quote correctly.
 
 ## Compatibility notes
 
-- The extension targets VS Code 1.104 or later and current Autolab v1 API routes.
+- The extension targets VS Code 1.106 or later (needed for the right-hand sidebar views) and current Autolab v1 API routes.
 - Older Autolab installations that do not support non-confidential Doorkeeper clients need an Autolab upgrade or an administrator-side OAuth broker. The extension intentionally has no client-secret setting.
-- Autolab currently returns one generalized feedback payload for a submission even though the endpoint accepts a problem name. The results panel therefore displays one autograder feedback section alongside the per-problem score table.
+- Autolab can return the same feedback payload for several problems. The sidebar displays identical output once alongside the per-problem score table.

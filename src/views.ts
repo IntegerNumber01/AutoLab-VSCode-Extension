@@ -421,6 +421,7 @@ export class SubmissionsProvider implements vscode.TreeDataProvider<SubmissionNo
   private readonly changeEmitter = new vscode.EventEmitter<SubmissionNode | undefined>();
   readonly onDidChangeTreeData = this.changeEmitter.event;
   private readonly sessionSubscription: vscode.Disposable;
+  private shown?: { course: string; assessment: string; host: string };
 
   constructor(private readonly session: SessionManager) {
     this.sessionSubscription = session.onDidChangeSession(() => this.refresh());
@@ -433,6 +434,12 @@ export class SubmissionsProvider implements vscode.TreeDataProvider<SubmissionNo
 
   refresh(): void {
     this.changeEmitter.fire(undefined);
+  }
+
+  /** Shows the runs of the lab open in the sidebar, even one that is not downloaded. */
+  showLab(course: string, assessment: string): void {
+    this.shown = { course, assessment, host: readSettings().host };
+    this.refresh();
   }
 
   getTreeItem(node: SubmissionNode): vscode.TreeItem {
@@ -481,32 +488,34 @@ export class SubmissionsProvider implements vscode.TreeDataProvider<SubmissionNo
       return [];
     }
 
-    const lab = await findCurrentLab();
-    if (!lab) {
-      return [{ type: "message", label: "Open a downloaded lab to see submissions." }];
-    }
-    if (lab.metadata.host !== readSettings().host) {
-      return [{
-        type: "message",
-        label: `This lab belongs to ${lab.metadata.host}. Switch Autolab servers to load its submissions.`,
-        command: { command: "autolab.setup", title: "Switch Autolab Server" },
-      }];
+    let course: string;
+    let assessment: string;
+    if (this.shown && this.shown.host === readSettings().host) {
+      ({ course, assessment } = this.shown);
+    } else {
+      const lab = await findCurrentLab();
+      if (!lab) {
+        return [{ type: "message", label: "Open a downloaded lab to see submissions." }];
+      }
+      if (lab.metadata.host !== readSettings().host) {
+        return [{
+          type: "message",
+          label: `This lab belongs to ${lab.metadata.host}. Switch Autolab servers to load its submissions.`,
+          command: { command: "autolab.setup", title: "Switch Autolab Server" },
+        }];
+      }
+      ({ course, assessment } = lab.metadata);
     }
     try {
-      const submissions = await this.session.api().getSubmissions(lab.metadata.course, lab.metadata.assessment);
+      const submissions = await this.session.api().getSubmissions(course, assessment);
       if (!submissions.length) {
         return [{
           type: "message",
-          label: "No submissions yet — submit this lab when ready.",
-          command: { command: "autolab.submit", title: "Submit Lab" },
+          label: "No submissions yet. Submit this lab when ready.",
+          command: { command: "autolab.submitAssessment", title: "Submit Lab", arguments: [course, assessment] },
         }];
       }
-      return submissions.map((submission) => ({
-        type: "submission",
-        submission,
-        course: lab.metadata.course,
-        assessment: lab.metadata.assessment,
-      }));
+      return submissions.map((submission) => ({ type: "submission", submission, course, assessment }));
     } catch (error) {
       return [{ type: "message", label: errorMessage(error) }];
     }

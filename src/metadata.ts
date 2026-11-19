@@ -8,6 +8,12 @@ import { assertNoSymbolicLinkPath, isPathInside, safePathSegment } from "./utils
 export const METADATA_DIRECTORY = ".autolab";
 export const METADATA_FILENAME = "assessment.json";
 
+let selectedDirectory: string | undefined;
+
+export function selectCurrentLab(directory: string): void {
+  selectedDirectory = directory;
+}
+
 export interface LocalLab {
   directory: string;
   metadata: LabMetadata;
@@ -57,6 +63,13 @@ export async function writeLabMetadata(directory: string, metadata: LabMetadata)
 }
 
 export async function findCurrentLab(): Promise<LocalLab | undefined> {
+  if (selectedDirectory && vscode.workspace.getWorkspaceFolder(vscode.Uri.file(selectedDirectory))) {
+    const metadata = await readLabMetadata(selectedDirectory);
+    if (metadata) {
+      return { directory: selectedDirectory, metadata };
+    }
+  }
+
   const activeFile = vscode.window.activeTextEditor?.document.uri;
   if (activeFile?.scheme === "file") {
     const workspaceFolder = vscode.workspace.getWorkspaceFolder(activeFile);
@@ -98,6 +111,17 @@ export async function findLabFromDirectory(start: string, boundary: string): Pro
 }
 
 export async function localLabFor(course: string, assessment: string): Promise<LocalLab | undefined> {
+  const current = await findCurrentLab();
+  if (current?.metadata.host === readSettings().host && current.metadata.course === course && current.metadata.assessment === assessment) {
+    return current;
+  }
+  // An opened lab remains usable if it was moved or the download root changed.
+  for (const folder of vscode.workspace.workspaceFolders ?? []) {
+    const metadata = await readLabMetadata(folder.uri.fsPath);
+    if (metadata?.host === readSettings().host && metadata.course === course && metadata.assessment === assessment) {
+      return { directory: folder.uri.fsPath, metadata };
+    }
+  }
   const root = readSettings().workspaceFolder;
   if (!root) {
     return undefined;

@@ -1,7 +1,3 @@
-import * as vscode from "vscode";
-import type { SessionManager } from "./auth";
-import { readSettings } from "./config";
-import type { DashboardModel } from "./views";
 import type {
   AutolabAssessmentDetails,
   AutolabProblem,
@@ -9,207 +5,28 @@ import type {
   DashboardAssessment,
 } from "./types";
 import {
-  assessmentPath,
-  errorMessage,
   escapeHtml,
   formatDate,
   formatNumber,
-  joinHostPath,
-  parseAutograderFeedback,
   submissionScore,
 } from "./utils";
-import type { AutograderPayload } from "./utils";
+import type { LocatedTestFailure, ResolvedFeedbackLocation } from "./feedback";
 
-interface WebviewMessage {
-  action?: string;
-  version?: number;
-}
+export type LocatedFailure = LocatedTestFailure & { targetId?: number };
 
-export class PanelManager implements vscode.Disposable {
-  private readonly assessmentPanels = new Map<string, vscode.WebviewPanel>();
-  private readonly resultsPanels = new Map<string, vscode.WebviewPanel>();
-  /** Version each results panel is currently showing, so Refresh keeps the chosen version. */
-  private readonly resultsVersions = new Map<string, number | undefined>();
-
-  constructor(
-    private readonly session: SessionManager,
-    private readonly dashboard: DashboardModel,
-  ) {}
-
-  dispose(): void {
-    for (const panel of [...this.assessmentPanels.values(), ...this.resultsPanels.values()]) {
-      panel.dispose();
-    }
-    this.assessmentPanels.clear();
-    this.resultsPanels.clear();
-    this.resultsVersions.clear();
-  }
-
-  async showAssessment(course: string, assessment: string): Promise<void> {
-    const key = `${course}/${assessment}`;
-    const existing = this.assessmentPanels.get(key);
-    if (existing) {
-      existing.reveal(vscode.ViewColumn.Active);
-      await this.renderAssessmentPanel(existing, course, assessment);
-      return;
-    }
-
-    const panel = vscode.window.createWebviewPanel(
-      "autolabAssessment",
-      "Autolab Lab",
-      vscode.ViewColumn.Active,
-      { enableScripts: true, retainContextWhenHidden: true },
-    );
-    this.assessmentPanels.set(key, panel);
-    panel.onDidDispose(() => this.assessmentPanels.delete(key));
-    panel.webview.onDidReceiveMessage(async (message: WebviewMessage) => {
-      try {
-        switch (message.action) {
-          case "download":
-            await vscode.commands.executeCommand("autolab.download", course, assessment);
-            break;
-          case "open":
-            await vscode.commands.executeCommand("autolab.openLab", course, assessment);
-            break;
-          case "submit":
-            await vscode.commands.executeCommand("autolab.submitAssessment", course, assessment);
-            break;
-          case "results":
-            await this.showResults(course, assessment);
-            break;
-          case "browser":
-            await vscode.env.openExternal(vscode.Uri.parse(assessmentUrl(course, assessment)));
-            return;
-          case "refresh":
-            this.dashboard.refresh();
-            break;
-        }
-        if (this.assessmentPanels.has(key)) {
-          await this.renderAssessmentPanel(panel, course, assessment);
-        }
-      } catch (error) {
-        await vscode.window.showErrorMessage(errorMessage(error));
-      }
-    });
-    await this.renderAssessmentPanel(panel, course, assessment);
-  }
-
-  async showResults(course: string, assessment: string, requestedVersion?: number): Promise<void> {
-    const key = `${course}/${assessment}`;
-    let panel = this.resultsPanels.get(key);
-    if (!panel) {
-      panel = vscode.window.createWebviewPanel(
-        "autolabResults",
-        `${assessment} — results`,
-        vscode.ViewColumn.Active,
-        { enableScripts: true, retainContextWhenHidden: true },
-      );
-      this.resultsPanels.set(key, panel);
-      panel.onDidDispose(() => {
-        this.resultsPanels.delete(key);
-        this.resultsVersions.delete(key);
-      });
-
-      const owned = panel;
-      owned.webview.onDidReceiveMessage(async (message: WebviewMessage) => {
-        try {
-          if (message.action === "version" && typeof message.version === "number") {
-            this.resultsVersions.set(key, message.version);
-          }
-          if (message.action === "version" || message.action === "refresh") {
-            await this.renderResultsPanel(owned, course, assessment, this.resultsVersions.get(key));
-          }
-        } catch (error) {
-          await vscode.window.showErrorMessage(errorMessage(error));
-        }
-      });
-    } else {
-      panel.reveal(vscode.ViewColumn.Active);
-    }
-
-    this.resultsVersions.set(key, requestedVersion);
-    await this.renderResultsPanel(panel, course, assessment, requestedVersion);
-  }
-
-  private async renderResultsPanel(
-    panel: vscode.WebviewPanel,
-    course: string,
-    assessment: string,
-    requestedVersion?: number,
-  ): Promise<void> {
-    panel.webview.html = loadingHtml("Loading scores and feedback…");
-
-    const api = this.session.api();
-    const [details, fetchedProblems, submissions] = await Promise.all([
-      api.getAssessment(course, assessment),
-      api.getProblems(course, assessment).catch(() => [] as AutolabProblem[]),
-      api.getSubmissions(course, assessment),
-    ]);
-    // `/problems` needs the user_courses scope, but the assessment itself reports every
-    // problem's maximum score, which is all this panel uses it for.
-    const problems = fetchedProblems.length ? fetchedProblems : problemsFromDetails(details);
-
-    const submission = requestedVersion === undefined
-      ? submissions[0]
-      : submissions.find((item) => item.version === requestedVersion);
-    if (!submission) {
-      throw new Error(
-        requestedVersion === undefined
-          ? "This lab has no submissions yet."
-          : `Submission version ${requestedVersion} was not found.`,
-      );
-    }
-
-    // Autolab returns feedback per problem, so ask for every problem the submission was scored on.
-    const problemNames = problems.length
-      ? problems.map((problem) => problem.name)
-      : Object.keys(submission.scores);
-    const feedback = await Promise.all(problemNames.map(async (problem): Promise<ProblemFeedback> => {
-      try {
-        return { problem, text: await api.getFeedback(course, assessment, submission.version, problem) };
-      } catch (error) {
-        return { problem, error: errorMessage(error) };
-      }
-    }));
-
-    panel.title = `${details.display_name} — v${submission.version}`;
-    panel.webview.html = resultsHtml(details, problems, submission, submissions, feedback);
-  }
-
-  private async renderAssessmentPanel(panel: vscode.WebviewPanel, course: string, assessment: string): Promise<void> {
-    panel.webview.html = loadingHtml("Loading lab…");
-    let item: DashboardAssessment | undefined;
-    try {
-      item = await this.dashboard.find(course, assessment);
-    } catch (error) {
-      panel.webview.html = errorHtml(errorMessage(error));
-      return;
-    }
-    if (!item) {
-      panel.webview.html = errorHtml("This lab is no longer available in your courses.");
-      return;
-    }
-    panel.title = item.assessment.display_name;
-    panel.webview.html = assessmentHtml(item);
-  }
-}
-
-interface ProblemFeedback {
+export interface ProblemFeedback {
   problem: string;
   text?: string;
   error?: string;
+  locations?: (ResolvedFeedbackLocation & { id: number })[];
+  failures?: LocatedFailure[];
 }
 
-function problemsFromDetails(details: AutolabAssessmentDetails): AutolabProblem[] {
+export function problemsFromDetails(details: AutolabAssessmentDetails): AutolabProblem[] {
   return Object.entries(details.max_scores ?? {}).map(([name, max_score]) => ({ name, max_score }));
 }
 
-function assessmentUrl(course: string, assessment: string): string {
-  const host = readSettings().host;
-  return joinHostPath(host, assessmentPath(course, assessment));
-}
-
-function assessmentHtml(item: DashboardAssessment): string {
+export function assessmentHtml(item: DashboardAssessment): string {
   const nonce = getNonce();
   const latest = item.submissions[0];
   const score = submissionScore(latest);
@@ -247,7 +64,6 @@ function assessmentHtml(item: DashboardAssessment): string {
         : '<button data-action="download" class="primary">Download Lab</button>'}
       ${latest ? '<button data-action="results">Scores &amp; Feedback</button>' : ""}
       <button data-action="browser">View on Autolab</button>
-      <button data-action="refresh">Refresh</button>
     </section>
 
     <section class="grid">
@@ -263,7 +79,7 @@ function assessmentHtml(item: DashboardAssessment): string {
     ${details?.description ? `<section><h2>About this lab</h2><p class="description">${escapeHtml(stripHtml(details.description))}</p></section>` : ""}
     ${latest
       ? scoresTable(latest, details)
-      : '<section class="empty"><h2>Nothing submitted yet</h2><p>Download the lab, open it in a dedicated VS Code window, and submit when ready.</p></section>'}
+      : '<section class="empty"><h2>Nothing submitted yet</h2><p>Download the lab, open it in this workspace, and submit when ready.</p></section>'}
     ${item.error ? `<p class="warning">${escapeHtml(item.error)}</p>` : ""}
   `, true);
 }
@@ -283,7 +99,7 @@ function describeArtifact(
   return format ?? "Unknown";
 }
 
-function resultsHtml(
+export function resultsHtml(
   details: AutolabAssessmentDetails,
   problems: AutolabProblem[],
   submission: AutolabSubmission,
@@ -298,74 +114,104 @@ function resultsHtml(
       : `${formatNumber(score.earned)} / ${formatNumber(details.max_total_score)}`
     : "Awaiting score";
 
+  const entries = uniqueFeedback(feedback);
+  const failures = entries.flatMap((entry) => (entry.failures ?? []).map((failure) => ({ entry, failure })));
+  const compilerMessages = entries.flatMap((entry) => (entry.locations ?? []).filter((location) => location.severity));
+  const status = failures.length
+    ? `<span class="pill danger">${failures.length} ${failures.length === 1 ? "test" : "tests"} failing</span>`
+    : compilerMessages.some((item) => item.severity === "error")
+      ? '<span class="pill danger">Compile errors</span>'
+      : "";
+
   const versions = allSubmissions.length > 1
-    ? `<section><h2>Versions</h2><div class="actions">${allSubmissions.map((item) =>
-        `<button data-action="version" data-version="${escapeHtml(item.version)}"${item.version === submission.version ? ' class="primary"' : ""}>v${escapeHtml(item.version)}</button>`,
-      ).join("")}</div></section>`
+    ? `<div class="versions"><span class="muted">Version</span>${allSubmissions.map((item) =>
+        `<button class="chip${item.version === submission.version ? " active" : ""}" data-action="version" data-version="${escapeHtml(item.version)}">${escapeHtml(item.version)}</button>`,
+      ).join("")}</div>`
     : "";
+
+  const showProblem = entries.length > 1;
+  const failureList = failures.length
+    ? `<h2>Failing tests <span class="count">${failures.length}</span></h2>
+      <ul class="issues">${failures.map(({ entry, failure }) => failureItem(failure, showProblem ? entry.problem : undefined)).join("")}</ul>`
+    : "";
+  const compilerList = compilerMessages.length
+    ? `<h2>Compiler messages <span class="count">${compilerMessages.length}</span></h2>
+      <ul class="issues">${compilerMessages.map(compilerItem).join("")}</ul>`
+    : "";
+  const hasFindings = Boolean(failures.length || compilerMessages.length);
 
   return page(nonce, `
     <header>
-      <div class="eyebrow">Submission version ${escapeHtml(submission.version)} · ${escapeHtml(submission.filename)}</div>
       <h1>${escapeHtml(details.display_name)}</h1>
-      <div class="badges">
-        <span class="badge">${escapeHtml(scoreText)}</span>
-        <span class="badge">${escapeHtml(formatDate(submission.created_at) ?? submission.created_at)}</span>
-      </div>
+      <div class="score-line"><span class="score">${escapeHtml(scoreText)}</span>${status}</div>
     </header>
-    <section class="actions"><button data-action="refresh" class="primary">Refresh Results</button></section>
-    ${resultsScoreTable(submission, problems)}
+    <div class="actions"><button data-action="submit" class="primary">Submit again</button><button data-action="assessment">Lab details</button></div>
     ${versions}
-    <section>
-      <h2>Autograder feedback</h2>
-      ${feedbackSections(feedback)}
-    </section>
+    ${failureList}
+    ${compilerList}
+    ${problems.length > 1 || Object.keys(submission.scores).length > 1 ? resultsScoreTable(submission, problems) : ""}
+    ${rawOutput(entries, feedback, !hasFindings)}
+    ${hasFindings ? '<p class="muted note">Links open your current local files, which may have changed since this version was submitted.</p>' : ""}
   `, true);
 }
 
-function feedbackSections(feedback: ProblemFeedback[]): string {
-  const withText = feedback.filter((entry) => entry.text?.trim());
-  if (!withText.length) {
-    const firstError = feedback.find((entry) => entry.error)?.error;
-    return `<div class="empty"><p>${escapeHtml(firstError ?? "No feedback is available for this submission yet.")}</p></div>`;
-  }
+function uniqueFeedback(feedback: ProblemFeedback[]): ProblemFeedback[] {
+  return feedback.filter((entry, index) => entry.text?.trim() && feedback.findIndex((other) => other.text === entry.text) === index);
+}
 
-  return withText.map((entry, index) => {
-    const parsed = parseAutograderFeedback(entry.text ?? "");
-    const summary = parsed ? autograderSummary(parsed) : "";
-    const label = withText.length === 1 ? "Autograder output" : entry.problem;
-    return `<details${index === 0 ? " open" : ""}>
-      <summary>${escapeHtml(label)}</summary>
-      ${summary}
-      <pre class="feedback">${escapeHtml(entry.text ?? "")}</pre>
-    </details>`;
+function sourceButton(id: number | undefined, label: string, title: string): string {
+  return id === undefined
+    ? ""
+    : `<button class="source-link" data-action="source" data-location="${id}" title="${escapeHtml(title)}">${escapeHtml(label)}</button>`;
+}
+
+function failureItem(failure: LocatedFailure, problem?: string): string {
+  const target = failure.target;
+  const fileName = target ? target.localFile.split(/[\/]/).pop() ?? target.localFile : "";
+  const link = target
+    ? sourceButton(failure.targetId, `${target.symbol ? `${target.symbol}() · ` : ""}${fileName}:${target.line}`,
+      target.symbol ? `Open the ${target.symbol} method this test exercises` : "Open the line the autograder reported")
+    : "";
+  const comparison = failure.expected !== undefined || failure.actual !== undefined
+    ? `<div class="compare"><span>Expected</span><code>${escapeHtml(failure.expected ?? "")}</code><span>Got</span><code>${escapeHtml(failure.actual ?? "")}</code></div>`
+    : "";
+  return `<li class="issue">
+    <div class="issue-head"><span class="mark error" aria-hidden="true">✕</span><span class="name">${escapeHtml(failure.test)}</span>${problem ? `<span class="muted">${escapeHtml(problem)}</span>` : ""}</div>
+    ${failure.message ? `<div class="message">${escapeHtml(failure.message)}</div>` : ""}
+    ${comparison}
+    ${link ? `<div class="where">${link}</div>` : ""}
+  </li>`;
+}
+
+function compilerItem(location: ResolvedFeedbackLocation & { id: number }): string {
+  const fileName = location.localFile.split(/[\/]/).pop() ?? location.file;
+  return `<li class="issue">
+    <div class="issue-head"><span class="mark ${location.severity === "error" ? "error" : "warning"}" aria-hidden="true">${location.severity === "error" ? "✕" : "!"}</span><span class="message">${escapeHtml(location.message)}</span></div>
+    <div class="where">${sourceButton(location.id, `${fileName}:${location.line}:${location.column}`, "Open this line")}</div>
+  </li>`;
+}
+
+function rawOutput(entries: ProblemFeedback[], feedback: ProblemFeedback[], open: boolean): string {
+  if (!entries.length) {
+    const firstError = feedback.find((entry) => entry.error)?.error;
+    return `<p class="muted">${escapeHtml(firstError ?? "No feedback is available for this submission yet.")}</p>`;
+  }
+  return entries.map((entry) => {
+    const label = entries.length === 1 ? "Full autograder output" : `${entry.problem} — full output`;
+    return `<details class="raw"${open ? " open" : ""}><summary>${escapeHtml(label)}</summary><pre class="feedback">${linkedFeedback(entry)}</pre></details>`;
   }).join("");
 }
 
-function autograderSummary(payload: AutograderPayload): string {
-  const parts: string[] = [];
-
-  const scoreRows = Object.entries(payload.scores ?? {})
-    .map(([name, value]) => `<tr><td>${escapeHtml(name)}</td><td class="numeric">${escapeHtml(
-      typeof value === "number" ? formatNumber(value) : String(value),
-    )}</td></tr>`)
-    .join("");
-  if (scoreRows) {
-    parts.push(`<table><thead><tr><th>Reported score</th><th class="numeric">Value</th></tr></thead><tbody>${scoreRows}</tbody></table>`);
+function linkedFeedback(entry: ProblemFeedback): string {
+  const text = entry.text ?? "";
+  let html = "";
+  let offset = 0;
+  for (const location of entry.locations ?? []) {
+    html += escapeHtml(text.slice(offset, location.start));
+    html += '<button class="source-link" data-action="source" data-location="' + location.id + '" title="Open local source">' + escapeHtml(text.slice(location.start, location.end)) + '</button>';
+    offset = location.end;
   }
-
-  const stageRows = Object.entries(payload.stages ?? {}).map(([name, value]) => {
-    const stage = (value && typeof value === "object" ? value : {}) as Record<string, unknown>;
-    const passed = stage._passed ?? stage.passed;
-    const message = stage._message ?? stage.message ?? "";
-    const status = typeof passed === "boolean" ? (passed ? "Passed" : "Failed") : "—";
-    return `<tr><td>${escapeHtml(name)}</td><td>${escapeHtml(status)}</td><td>${escapeHtml(String(message))}</td></tr>`;
-  }).join("");
-  if (stageRows) {
-    parts.push(`<table><thead><tr><th>Stage</th><th>Result</th><th>Detail</th></tr></thead><tbody>${stageRows}</tbody></table>`);
-  }
-
-  return parts.length ? `<div class="summary">${parts.join("")}</div>` : "";
+  return html + escapeHtml(text.slice(offset));
 }
 
 function scoresTable(submission: AutolabSubmission, details?: AutolabAssessmentDetails): string {
@@ -388,7 +234,7 @@ function resultsScoreTable(submission: AutolabSubmission, problems: AutolabProbl
       : value === "unreleased" ? "Unreleased" : "—";
     return `<tr><td>${escapeHtml(problem)}</td><td class="numeric">${escapeHtml(valueText)}</td></tr>`;
   }).join("");
-  return `<section><h2>Problem scores</h2><table><thead><tr><th>Problem</th><th class="numeric">Score</th></tr></thead><tbody>${rows || '<tr><td>Scores are pending</td><td class="numeric">—</td></tr>'}</tbody></table></section>`;
+  return `<section><h2>Scores</h2><table><thead><tr><th>Problem</th><th class="numeric">Score</th></tr></thead><tbody>${rows || '<tr><td>Scores are pending</td><td class="numeric">—</td></tr>'}</tbody></table></section>`;
 }
 
 function page(nonce: string, body: string, script: boolean): string {
@@ -398,8 +244,8 @@ function page(nonce: string, body: string, script: boolean): string {
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <style nonce="${nonce}">
       :root { color-scheme: light dark; }
-      body { max-width: 900px; margin: 0 auto; padding: 36px 28px 64px; color: var(--vscode-foreground); font-family: var(--vscode-font-family); font-size: var(--vscode-font-size); }
-      h1 { margin: 6px 0 14px; font-size: 2rem; line-height: 1.15; }
+      body { margin: 0; padding: 12px 12px 24px; color: var(--vscode-foreground); font-family: var(--vscode-font-family); font-size: var(--vscode-font-size); }
+      h1 { margin: 6px 0 14px; font-size: 1.35rem; overflow-wrap: anywhere; line-height: 1.15; }
       h2 { margin-top: 32px; font-size: 1.15rem; }
       .eyebrow { color: var(--vscode-descriptionForeground); text-transform: uppercase; letter-spacing: .08em; font-size: .78rem; }
       .badges, .actions { display: flex; flex-wrap: wrap; gap: 8px; }
@@ -407,36 +253,61 @@ function page(nonce: string, body: string, script: boolean): string {
       .badge.success { color: var(--vscode-testing-iconPassed); }
       .badge.danger, .warning { color: var(--vscode-errorForeground); }
       .actions { margin: 26px 0; }
-      button { border: 1px solid var(--vscode-button-border, transparent); border-radius: 3px; padding: 7px 14px; color: var(--vscode-button-secondaryForeground); background: var(--vscode-button-secondaryBackground); cursor: pointer; font-family: inherit; font-size: inherit; }
+      button { border: 1px solid var(--vscode-button-border, transparent); border-radius: 3px; padding: 5px 9px; color: var(--vscode-button-secondaryForeground); background: var(--vscode-button-secondaryBackground); cursor: pointer; font-family: inherit; font-size: inherit; }
       button:hover { background: var(--vscode-button-secondaryHoverBackground); }
       button.primary { color: var(--vscode-button-foreground); background: var(--vscode-button-background); }
       button.primary:hover { background: var(--vscode-button-hoverBackground); }
       button:disabled { opacity: .45; cursor: not-allowed; }
-      .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 10px; }
+      .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(125px, 1fr)); gap: 10px; }
       .fact { padding: 14px; border: 1px solid var(--vscode-widget-border); border-radius: 5px; background: var(--vscode-editorWidget-background); overflow-wrap: anywhere; }
       .fact span { display: block; color: var(--vscode-descriptionForeground); font-size: .78rem; margin-bottom: 5px; }
       .description { white-space: pre-wrap; line-height: 1.55; }
-      table { border-collapse: collapse; width: 100%; margin-top: 10px; }
+      table { overflow-wrap: anywhere; border-collapse: collapse; width: 100%; margin-top: 10px; }
       th, td { border-bottom: 1px solid var(--vscode-widget-border); text-align: left; padding: 9px 4px; }
       .numeric { text-align: right; font-variant-numeric: tabular-nums; }
       .muted { color: var(--vscode-descriptionForeground); overflow-wrap: anywhere; }
       code { font-family: var(--vscode-editor-font-family); }
       .empty { padding: 18px; border: 1px dashed var(--vscode-widget-border); border-radius: 5px; color: var(--vscode-descriptionForeground); }
-      details { margin-top: 12px; border: 1px solid var(--vscode-widget-border); border-radius: 5px; padding: 10px 14px; }
-      summary { cursor: pointer; font-weight: 600; }
-      .summary { margin-top: 8px; }
-      .feedback { white-space: pre-wrap; word-break: break-word; max-height: 30rem; overflow: auto; padding: 16px; margin-top: 12px; border: 1px solid var(--vscode-widget-border); border-radius: 5px; background: var(--vscode-textCodeBlock-background); font-family: var(--vscode-editor-font-family); font-size: var(--vscode-editor-font-size); line-height: 1.45; }
+      .score-line { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
+      .score { font-size: 1.6rem; font-weight: 600; font-variant-numeric: tabular-nums; }
+      .pill { padding: 2px 8px; border-radius: 999px; font-size: .85rem; border: 1px solid currentColor; }
+      .pill.danger { color: var(--vscode-errorForeground); }
+      .versions { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; margin: -12px 0 8px; }
+      .versions .muted { margin-right: 4px; }
+      .chip { min-width: 2.2em; padding: 2px 6px; }
+      .chip.active { color: var(--vscode-button-foreground); background: var(--vscode-button-background); }
+      .count { color: var(--vscode-descriptionForeground); font-weight: normal; }
+      ul.issues { list-style: none; margin: 8px 0 0; padding: 0; }
+      .issue { padding: 10px 0 10px 2px; border-bottom: 1px solid var(--vscode-widget-border); }
+      .issue:last-child { border-bottom: 0; }
+      .issue-head { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+      .issue .name { font-weight: 600; font-family: var(--vscode-editor-font-family); overflow-wrap: anywhere; }
+      .mark { width: 1em; flex: none; text-align: center; font-weight: 700; }
+      .mark.error { color: var(--vscode-errorForeground); }
+      .mark.warning { color: var(--vscode-editorWarning-foreground); }
+      .issue .message { margin: 4px 0 0 calc(1em + 8px); white-space: pre-wrap; overflow-wrap: anywhere; }
+      .issue-head .message { margin: 0; }
+      .compare { display: grid; grid-template-columns: max-content 1fr; gap: 2px 10px; margin: 6px 0 0 calc(1em + 8px); }
+      .compare span { color: var(--vscode-descriptionForeground); }
+      .compare code { overflow-wrap: anywhere; }
+      .where { margin: 6px 0 0 calc(1em + 8px); }
+      .note { margin-top: 18px; font-size: .9em; }
+      details.raw { margin-top: 28px; }
+      details.raw summary { cursor: pointer; color: var(--vscode-descriptionForeground); }
+      .source-link { display: inline; padding: 0; border: 0; background: transparent; color: var(--vscode-textLink-foreground); text-decoration: underline; font: inherit; text-align: left; white-space: pre-wrap; }
+      .source-link:hover { background: transparent; }
+      .feedback { white-space: pre-wrap; word-break: break-word; max-height: 30rem; overflow: auto; padding: 12px; margin: 8px 0 0; border-radius: 4px; background: var(--vscode-textCodeBlock-background); font-family: var(--vscode-editor-font-family); font-size: var(--vscode-editor-font-size); line-height: 1.45; }
     </style></head><body>${body}
-    ${script ? `<script nonce="${nonce}">const vscode = acquireVsCodeApi(); document.addEventListener('click', (event) => { const button = event.target.closest('button[data-action]'); if (button && !button.disabled) vscode.postMessage({ action: button.dataset.action, version: button.dataset.version ? Number(button.dataset.version) : undefined }); });</script>` : ""}
+    ${script ? `<script nonce="${nonce}">const vscode = acquireVsCodeApi(); document.addEventListener('click', (event) => { const button = event.target.closest('button[data-action]'); if (button && !button.disabled) vscode.postMessage({ action: button.dataset.action, version: button.dataset.version ? Number(button.dataset.version) : undefined, location: button.dataset.location !== undefined ? Number(button.dataset.location) : undefined }); });</script>` : ""}
   </body></html>`;
 }
 
-function loadingHtml(message: string): string {
+export function loadingHtml(message: string): string {
   return page(getNonce(), `<div class="empty">${escapeHtml(message)}</div>`, false);
 }
 
-function errorHtml(message: string): string {
-  return page(getNonce(), `<h1>Couldn’t load this lab</h1><p class="warning">${escapeHtml(message)}</p>`, false);
+export function errorHtml(message: string): string {
+  return page(getNonce(), `<button data-action="assessment">Lab details</button><button data-action="refresh">Retry</button><p class="warning">${escapeHtml(message)}</p>`, true);
 }
 
 function fact(label: string, value: string): string {

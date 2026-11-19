@@ -1,11 +1,12 @@
 import * as fs from "fs";
+import * as path from "path";
 import * as vscode from "vscode";
 import { SessionManager } from "./auth";
 import { readSettings, updateGlobalSetting } from "./config";
 import { LabDownloader, openLabWindow } from "./downloads";
 import { formatLabReference, parseLabReference } from "./manual";
-import { findCurrentLab } from "./metadata";
-import { PanelManager } from "./panels";
+import { findCurrentLab, findLabFromDirectory, localLabFor, readLabMetadata, selectCurrentLab } from "./metadata";
+import { LabSidebar } from "./sidebar";
 import { SubmissionManager } from "./submission";
 import type { AutolabSubmission, DashboardAssessment } from "./types";
 import { errorMessage, formatNumber, normalizeHost, submissionScore } from "./utils";
@@ -17,11 +18,19 @@ export function activate(context: vscode.ExtensionContext): void {
   const accountProvider = new AccountProvider(session);
   const assignmentsProvider = new AssignmentsProvider(dashboard);
   const submissionsProvider = new SubmissionsProvider(session);
-  const panels = new PanelManager(session, dashboard);
+  const panels = new LabSidebar(session, dashboard);
+  const savedLab = context.workspaceState.get<string>("autolab.currentLab") ?? context.globalState.get<string>("autolab.lastLab");
+  if (savedLab) { selectCurrentLab(savedLab); }
   const statusBar = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 50);
   statusBar.command = "autolab.submit";
 
   context.subscriptions.push(
+    register("autolab.prepareLab", async (directory?: unknown) => {
+      if (typeof directory !== "string" || !(await readLabMetadata(directory))) { return; }
+      selectCurrentLab(directory);
+      await context.globalState.update("autolab.lastLab", directory);
+      await context.workspaceState.update("autolab.currentLab", directory);
+    }),
     session,
     dashboard,
     accountProvider,
@@ -32,6 +41,7 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.window.registerTreeDataProvider("autolab.account", accountProvider),
     vscode.window.registerTreeDataProvider("autolab.assignments", assignmentsProvider),
     vscode.window.registerTreeDataProvider("autolab.submissions", submissionsProvider),
+    vscode.window.registerWebviewViewProvider("autolab.details", panels, { webviewOptions: { retainContextWhenHidden: true } }),
   );
 
   const refreshAll = (): void => {
@@ -40,8 +50,28 @@ export function activate(context: vscode.ExtensionContext): void {
     submissionsProvider.refresh();
     void updateContext(statusBar);
   };
+  let editorGeneration = 0;
 
   context.subscriptions.push(
+    register("autolab.focusLab", async (directory?: unknown) => {
+      if (typeof directory !== "string") { return; }
+      const metadata = await readLabMetadata(directory);
+      if (!metadata) { return; }
+      selectCurrentLab(directory);
+      await context.workspaceState.update("autolab.currentLab", directory);
+      refreshAll();
+      await panels.showAssessment(metadata.course, metadata.assessment);
+    }),
+    panels.onDidSelectLab(async ({ course, assessment }) => {
+      // Run History, the status bar, and Submit all follow the lab shown in the sidebar.
+      submissionsProvider.showLab(course, assessment);
+      const lab = await localLabFor(course, assessment);
+      if (lab) {
+        selectCurrentLab(lab.directory);
+        await context.workspaceState.update("autolab.currentLab", lab.directory);
+      }
+      void updateContext(statusBar);
+    }),
     register("autolab.setup", () => guidedSetup(session, refreshAll)),
     register("autolab.signIn", async () => {
       await session.signIn();
@@ -101,7 +131,8 @@ export function activate(context: vscode.ExtensionContext): void {
         return;
       }
       refreshAll();
-      const actions = ["Open Lab"];
+      await openLabWindow(result.directory);
+      const actions: string[] = [];
       if (result.externalUrls.length) {
         actions.push("Open Online Material");
       }
@@ -109,9 +140,7 @@ export function activate(context: vscode.ExtensionContext): void {
         result.alreadyExisted ? "Your existing lab is ready. No work was overwritten." : "Lab downloaded successfully.",
         ...actions,
       );
-      if (choice === "Open Lab") {
-        await openLabWindow(result.directory);
-      } else if (choice === "Open Online Material") {
+      if (choice === "Open Online Material") {
         for (const url of result.externalUrls) {
           const destination = new URL(url);
           const confirmation = await vscode.window.showWarningMessage(
@@ -156,14 +185,33 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.workspace.onDidChangeWorkspaceFolders(() => {
       submissionsProvider.refresh();
       void updateContext(statusBar);
+      void panels.syncCurrentLab();
     }),
-    vscode.window.onDidChangeActiveTextEditor(() => {
+    vscode.window.onDidChangeActiveTextEditor(async (editor) => {
+      const generation = ++editorGeneration;
+      const uri = editor?.document.uri;
+      const folder = uri && vscode.workspace.getWorkspaceFolder(uri);
+      if (uri?.scheme === "file" && folder) {
+        const lab = await findLabFromDirectory(path.dirname(uri.fsPath), folder.uri.fsPath);
+        if (generation !== editorGeneration) { return; }
+        if (lab) {
+          selectCurrentLab(lab.directory);
+          await context.workspaceState.update("autolab.currentLab", lab.directory);
+        }
+      }
       submissionsProvider.refresh();
       void updateContext(statusBar);
+      void panels.syncCurrentLab();
     }),
   );
 
   void updateContext(statusBar);
+  void panels.syncCurrentLab();
+
+  const metadataWatcher = vscode.workspace.createFileSystemWatcher("**/.autolab/assessment.json");
+  const metadataChanged = (): void => { refreshAll(); void panels.syncCurrentLab(); };
+  context.subscriptions.push(metadataWatcher,
+    metadataWatcher.onDidCreate(metadataChanged), metadataWatcher.onDidChange(metadataChanged), metadataWatcher.onDidDelete(metadataChanged));
 }
 
 export function deactivate(): void {}
@@ -374,7 +422,7 @@ async function submitLab(
   session: SessionManager,
   submissionsProvider: SubmissionsProvider,
   dashboard: DashboardModel,
-  panels: PanelManager,
+  panels: LabSidebar,
   course?: string,
   assessment?: string,
 ): Promise<void> {
@@ -384,28 +432,29 @@ async function submitLab(
   }
   submissionsProvider.refresh();
   dashboard.refresh();
+  await panels.showResults(result.course, result.assessment, result.version);
 
   const item = await dashboard.find(result.course, result.assessment).catch(() => undefined);
-  const graded = item?.details?.has_autograder
+  const details = item?.details ?? await session.api().getAssessment(result.course, result.assessment).catch(() => undefined);
+  const graded = details?.has_autograder
     ? await awaitAutograder(session, result)
     : undefined;
 
   if (graded) {
     submissionsProvider.refresh();
     dashboard.refresh();
+    // The results were first drawn before grading finished; show the feedback now.
+    await panels.showResults(result.course, result.assessment, result.version);
   }
 
   const score = graded ? submissionScore(graded) : undefined;
   const message = score?.hasNumericScore
     ? `Version ${result.version} scored ${formatNumber(score.earned)}${
-      item?.details?.max_total_score ? ` / ${formatNumber(item.details.max_total_score)}` : ""
+      details?.max_total_score ? ` / ${formatNumber(details.max_total_score)}` : ""
     }.`
     : `Submitted successfully as version ${result.version}.`;
 
-  const choice = await vscode.window.showInformationMessage(message, "View Results");
-  if (choice === "View Results") {
-    await panels.showResults(result.course, result.assessment, result.version);
-  }
+  await vscode.window.showInformationMessage(message);
 }
 
 /**

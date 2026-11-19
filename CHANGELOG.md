@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- Open downloaded labs automatically in the current workspace, preserving the development host and restoring lab selection across workspace changes.
+- Activate from lab metadata and detect opened or moved lab folders without depending on course discovery.
+- Move lab details, scores, submission versions, and feedback into the Autolab sidebar; open run results automatically after submission.
+- Link recognized compiler and traceback locations to local source files and show explicit compiler errors and warnings in Problems with their submission version.
+- Show failing autograder tests as a flat list with expected and actual values, and link each one to the method it exercises (also listed in Problems). The full log is collapsed beneath.
+- Split the extension across both sidebars: Account and Labs stay in the Autolab activity bar on the left, while Lab Details & Feedback and Run History open in a **Current Lab** container in the right-hand (secondary) sidebar, so the Explorer stays usable beside the feedback. Requires VS Code 1.106 or later.
+- Run History, the status bar, and Submit now follow the lab shown in Lab Details.
+- Removed the duplicate in-page Refresh buttons; the view toolbar's Refresh remains.
 - Bounded API and attachment response sizes and kept request deadlines active through body consumption; cross-origin HTTP redirects now fail closed.
 - Hardened ZIP and tar extraction with entry, path-depth, decompression, expanded-size, and central-directory limits.
 - Made connection and exclusion settings immune to workspace overrides, and made secret, metadata, and editor-configuration exclusions mandatory for generated submissions.
